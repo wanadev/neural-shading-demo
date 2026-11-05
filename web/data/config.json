@@ -1,0 +1,93 @@
+{
+ "candle": {
+  "radius": 0.035,
+  "height": 0.1,
+  "cup_depth": 0.006,
+  "rim_radius": 0.003,
+  "wobble": 0.0008,
+  "seed": 7,
+  "segments": 128,
+  "rings": 96
+ },
+ "flame": {
+  "base": [
+   0.0,
+   0.11,
+   0.0
+  ],
+  "sphere_radius": 0.003,
+  "radiance": [
+   40.0,
+   22.0,
+   8.0
+  ],
+  "flicker_xz": 0.003,
+  "flicker_y": 0.002,
+  "intensity_range": [
+   0.8,
+   1.2
+  ]
+ },
+ "wax": {
+  "ior": 1.44,
+  "roughness": 0.1,
+  "sigma_t": 800.0,
+  "albedo": [
+   0.995,
+   0.99,
+   0.975
+  ]
+ },
+ "table": {
+  "size": 1.0,
+  "albedo": [
+   0.08,
+   0.06,
+   0.05
+  ]
+ },
+ "camera": {
+  "fov_y": 35.0,
+  "target": [
+   0.0,
+   0.06,
+   0.0
+  ],
+  "radius": [
+   0.2,
+   0.5
+  ],
+  "elevation_deg": [
+   -5.0,
+   60.0
+  ]
+ },
+ "exposure": 1.0,
+ "ref_views": [
+  {
+   "az_deg": 30,
+   "el_deg": 15,
+   "radius": 0.3
+  },
+  {
+   "az_deg": 120,
+   "el_deg": 35,
+   "radius": 0.3
+  },
+  {
+   "az_deg": 220,
+   "el_deg": 5,
+   "radius": 0.3
+  },
+  {
+   "az_deg": 300,
+   "el_deg": 55,
+   "radius": 0.3
+  }
+ ],
+ "widths": [
+  8,
+  16,
+  32
+ ]
+}
