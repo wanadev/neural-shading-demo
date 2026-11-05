@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bougie neuronale</title>
+<style>
+  :root { --bg: #0b0806; --fg: #eadfce; --accent: #e8a050; --muted: #8a7f70; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; }
+  #stage { position: relative; touch-action: none; user-select: none; }
+  canvas { display: block; }
+  #handle { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; cursor: ew-resize; }
+  #handle::after { content: "⇆"; position: absolute; top: 50%; left: -15px; width: 32px; height: 32px; margin-top: -16px; border-radius: 50%; background: #fff; color: #000; text-align: center; line-height: 32px; font-size: 16px; }
+  #handle::before { content: ""; position: absolute; top: 0; bottom: 0; left: -20px; right: -20px; } /* fat touch target */
+  .side { position: absolute; top: 8px; background: rgba(0,0,0,.6); color: #fff; border: 1px solid #555; border-radius: 4px; padding: 3px 6px; font: inherit; }
+  #left { left: 8px; } #right { right: 8px; }
+  #hud { position: absolute; left: 8px; right: 8px; bottom: 8px; font: 12px ui-monospace, monospace; color: #cfc; background: rgba(0,0,0,.55); padding: 4px 8px; border-radius: 4px; pointer-events: none; }
+  #controls { width: 100%; max-width: 560px; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > span:first-child { width: 64px; color: var(--muted); }
+  button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--muted); border-radius: 14px; padding: 4px 12px; cursor: pointer; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #000; }
+  #bench { white-space: pre; font: 12px ui-monospace, monospace; color: #cfc; }
+  #err { color: #f88; padding: 16px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="handle"></div>
+  <select id="left" class="side" aria-label="Côté gauche"></select>
+  <select id="right" class="side" aria-label="Côté droit"></select>
+  <div id="hud">chargement…</div>
+</div>
+<div id="controls">
+  <div class="row"><span>Réseau</span><span id="widths"></span><span style="color:var(--muted)">neurones</span></div>
+  <div class="row"><span>Flamme</span><button id="flicker" class="on">vacille</button><button id="still">fixe</button></div>
+  <div class="row"><span>Coût</span><button id="measure">Mesurer</button><a href="selftest.html" style="color:var(--muted)">auto-test</a></div>
+  <div id="bench"></div>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

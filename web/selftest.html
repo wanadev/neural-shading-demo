@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auto-test GLSL</title>
+<style>
+  body { margin: 0; padding: 24px 16px; background: #0b0806; color: #eadfce; font: 16px/1.5 system-ui, sans-serif; }
+  #out { white-space: pre-wrap; font: 18px ui-monospace, monospace; }
+  .pass { color: #8f8; } .fail { color: #f88; } .warn { color: #fc6; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js" } }
+</script>
+</head>
+<body>
+<h1>Auto-test du shader neuronal</h1>
+<p>Compare le réseau évalué en GLSL sur ce GPU au même réseau évalué en Python.</p>
+<div id="out">en cours…</div>
+<p><a href="index.html" style="color:#8a7f70">← démo</a></p>
+<script type="module" src="src/selftest.js"></script>
+</body>
+</html>

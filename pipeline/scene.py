@@ -27,7 +27,7 @@ def _scene(view, flame_offset, res, absorb):
     T = mi.ScalarTransform4f
     if absorb:
         medium = dict(type="homogeneous", sigma_t=1e5, albedo=0.0)
-        bsdf = dict(type="roughdielectric", int_ior=WAX["ior"], ext_ior=1.0, alpha=WAX["roughness"])
+        bsdf = dict(type="roughdielectric", distribution="ggx", int_ior=WAX["ior"], ext_ior=1.0, alpha=WAX["roughness"])
     else:
         medium = dict(type="homogeneous", sigma_t=WAX["sigma_t"], albedo=dict(type="rgb", value=list(WAX["albedo"])))
         bsdf = dict(type="null")
