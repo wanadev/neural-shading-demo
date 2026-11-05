@@ -8,7 +8,7 @@ FLAME = dict(base=(0.0, 0.110, 0.0), sphere_radius=0.003, radiance=(400.0, 220.0
 WAX = dict(ior=1.44, roughness=0.1, sigma_t=400.0, albedo=(0.995, 0.99, 0.975))
 TABLE = dict(size=1.0, albedo=(0.08, 0.06, 0.05))
 CAMERA = dict(fov_y=35.0, target=(0.0, 0.06, 0.0), radius=(0.2, 0.5), elevation_deg=(-5.0, 60.0))
-EXPOSURE = 1.0
+EXPOSURE = 3.0
 REF_VIEWS = [dict(az_deg=30, el_deg=15, radius=0.3), dict(az_deg=120, el_deg=35, radius=0.3),
              dict(az_deg=220, el_deg=5, radius=0.3), dict(az_deg=300, el_deg=55, radius=0.3)]
 WIDTHS = (8, 16, 32)
