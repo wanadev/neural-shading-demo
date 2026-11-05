@@ -17,9 +17,9 @@
   ],
   "sphere_radius": 0.003,
   "radiance": [
-   40.0,
-   22.0,
-   8.0
+   400.0,
+   220.0,
+   80.0
   ],
   "flicker_xz": 0.003,
   "flicker_y": 0.002,
@@ -31,7 +31,7 @@
  "wax": {
   "ior": 1.44,
   "roughness": 0.1,
-  "sigma_t": 800.0,
+  "sigma_t": 400.0,
   "albedo": [
    0.995,
    0.99,
