@@ -56,7 +56,7 @@ def train(npz_path, width, epochs=30, batch=4096, lr=3e-3, seed=0):
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     rng = np.random.default_rng(seed)
     for _ in range(steps):
-        b = torch.from_numpy(rng.choice(idx, min(batch, len(idx)), replace=False))
+        b = torch.from_numpy(idx[rng.integers(0, len(idx), batch)])  # with replacement: O(batch), not O(n)
         pred = model(Xs[b])
         # relative MSE (unbiased on noisy targets, unlike fitting a transformed target)
         loss = ((pred - Yt[b]) ** 2 / (pred.detach() + 0.01) ** 2).mean()
