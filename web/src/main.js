@@ -19,7 +19,7 @@ const ClampShader = {
 import { makeGround, makeJadeMaterial, makeLamp, setJadeAttributes } from "./materials.js";
 import { backlight, clampLamp, lampPosition } from "./lamp.js";
 import { leaveRef, nearestRefView, orbitLimits, viewDir, withPose } from "./refs.js";
-import { effectiveWidth, pickPipeline, sideMode } from "./policy.js";
+import { effectiveWidth, parseDeepLink, pickPipeline, pipelineSettings, sideMode } from "./policy.js";
 import { formatHud } from "./hud.js";
 import { bench, benchFrame, gpuTimer } from "./bench.js";
 
@@ -56,7 +56,8 @@ async function main() {
   const gl = renderer.getContext();
   const pipeline = pickPipeline({ halfFloatRT: renderer.extensions.has("EXT_color_buffer_half_float") || renderer.extensions.has("EXT_color_buffer_float") });
 
-  const envMap = new THREE.PMREMGenerator(renderer).fromEquirectangular(hdr).texture;
+  const settings = pipelineSettings(pipeline);
+  const envMap = settings.useEnvMap ? new THREE.PMREMGenerator(renderer).fromEquirectangular(hdr).texture : null;
   const camera = new THREE.PerspectiveCamera(cfg.camera.fov_y, 1, 0.01, 20);
   const target = new THREE.Vector3(...cfg.camera.target);
   const posOf = (v) => target.clone().addScaledVector(new THREE.Vector3(...viewDir(v)), v.radius);
@@ -72,7 +73,7 @@ async function main() {
     uSH: { value: envSH.sh.map((c) => new THREE.Vector3(...c.map((x) => x * cfg.env.scale))) },
   };
   const scene = new THREE.Scene();
-  const setBackground = (s) => { s.background = hdr; s.backgroundBlurriness = 0.4; s.backgroundIntensity = cfg.env.scale; };
+  const setBackground = (s) => { s.background = hdr; s.backgroundBlurriness = settings.backgroundBlurriness; s.backgroundIntensity = cfg.env.scale; };
   setBackground(scene);
   const dragon = new THREE.Mesh(geometry);
   dragon.castShadow = true;
@@ -94,7 +95,7 @@ async function main() {
   // reference side: blurred room behind the Mitsuba image (alpha = geometry)
   const bgScene = new THREE.Scene();
   setBackground(bgScene);
-  const refMat = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  const refMat = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, toneMapped: settings.refToneMapped });
   const refScene = new THREE.Scene();
   refScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), refMat));
   const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -154,17 +155,16 @@ async function main() {
       state.refIdx = null;
     }
   }
-  const q = new URLSearchParams(location.search);
-  const qp = Number.parseInt(q.get("pose"), 10);  // deep link: start at a reference pose (camera + lamp)
-  if (qp >= 0 && qp < cfg.ref_poses.length) {
-    const pose = cfg.ref_poses[qp];
+  const link = parseDeepLink(location.search, cfg);  // order: pose, lamp, sides (a ref side re-snaps the lamp)
+  if (link.pose !== null) {
+    const pose = cfg.ref_poses[link.pose];
     camera.position.copy(posOf(pose));
     controls.update();
     setLamp({ az_deg: pose.lamp_az_deg, el_deg: pose.lamp_el_deg });
   }
-  for (const side of ["left", "right"]) if (Object.hasOwn(LABELS, q.get(side) ?? "")) setSide(side, q.get(side));
-  if (q.has("split") && Number.isFinite(+q.get("split"))) state.split = THREE.MathUtils.clamp(+q.get("split"), 0, 1);
-  if (q.has("lamp")) { const [az, el] = q.get("lamp").split(",").map(Number); if (Number.isFinite(az) && Number.isFinite(el)) setLamp({ az_deg: az, el_deg: el }); }
+  if (link.lamp) setLamp(link.lamp);
+  for (const [side, mode] of Object.entries(link.sides)) setSide(side, mode);
+  if (link.split !== null) state.split = link.split;
 
   // camera gestures: a real move (not a tap) leaves the reference pose
   let orbiting = false;
@@ -255,7 +255,8 @@ async function main() {
   }
   let composer = null, bloom = null;
   if (pipeline === "hdr") {
-    composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+    composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType, samples: Math.min(4, renderer.capabilities.maxSamples) })); // MSAA: antialias:true only covers the screen pass
     bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.12, 0.3, 3.0);
     composer.addPass(new CurtainPass());
     composer.addPass(new ShaderPass(ClampShader));

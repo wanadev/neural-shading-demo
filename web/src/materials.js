@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { CLASSIC_GLSL, FEATURES_GLSL, SH_GLSL } from "./glsl.js";
 import { mlpGlsl } from "./mlp.js";
+import { shadowCameraRange } from "./lamp.js";
 
 // Jade = three.js MeshPhysicalMaterial with a black diffuse (so three computes the GGX coat:
 // prefiltered room reflections + lamp highlight, Fresnel from the jade IOR) plus our SSS term
@@ -99,6 +100,8 @@ export function makeLamp(cfg) {
   light.castShadow = true;
   light.shadow.mapSize.set(1024, 1024);
   light.shadow.bias = -0.0005;
+  Object.assign(light.shadow.camera, shadowCameraRange(cfg)); // default near = 0.5 m clipped the whole dragon
+  light.shadow.camera.updateProjectionMatrix();
   light.target.position.set(...cfg.lamp.center);
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16),
     new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(...cfg.lamp.radiance, THREE.LinearSRGBColorSpace) }));
