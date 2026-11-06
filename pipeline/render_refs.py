@@ -23,7 +23,7 @@ def save_png(path, rgb_linear):
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--res", type=int, default=1024)
-    p.add_argument("--spp", type=int, default=4096)
+    p.add_argument("--spp", type=int, default=2048)
     p.add_argument("--views", type=int, nargs="*", default=list(range(len(REF_VIEWS))))
     a = p.parse_args(argv)
     (WEB_DATA / "refs").mkdir(parents=True, exist_ok=True)
