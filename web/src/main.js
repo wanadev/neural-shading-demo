@@ -96,6 +96,10 @@ async function main() {
       state.refIdx = null;
     }
   }
+  // deep links for the article, e.g. ?left=neural&right=ref&split=0.5
+  const q = new URLSearchParams(location.search);
+  for (const side of ["left", "right"]) if (q.get(side) in LABELS) setSide(side, q.get(side));
+  if (q.has("split")) state.split = THREE.MathUtils.clamp(+q.get("split") || 0.5, 0, 1);
   // any user orbit leaves the reference pose: ref sides fall back to neural
   controls.addEventListener("start", () => {
     if (tween) return;
@@ -121,7 +125,7 @@ async function main() {
     handle.style.left = `${state.split * 100}%`;
   });
   handle.addEventListener("pointerup", () => { dragging = false; });
-  handle.style.left = "50%";
+  handle.style.left = `${state.split * 100}%`;
 
   function resize() {
     size = Math.max(240, Math.floor(Math.min(innerWidth, innerHeight - $("controls").offsetHeight)));
