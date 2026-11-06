@@ -45,3 +45,20 @@ export async function bench(renderer, renderFn, { seconds = 3, size = 1024, reps
   rt.dispose();
   return ms;
 }
+
+// Wall-clock ms per full frame (post-processing included) drawn by `frameFn` to the screen;
+// a 1-pixel readback of the default framebuffer forces completion.
+export async function benchFrame(renderer, frameFn, { seconds = 3, reps = 5 } = {}) {
+  const gl = renderer.getContext(), px = new Uint8Array(4);
+  const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  frameFn(); sync();
+  let n = 0;
+  const t0 = performance.now();
+  while (performance.now() - t0 < seconds * 1000) {
+    for (let i = 0; i < reps; i++) frameFn();
+    sync();
+    n += reps;
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return (performance.now() - t0) / n;
+}

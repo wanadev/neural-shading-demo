@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bougie neuronale</title>
+<title>Dragon de jade neuronal</title>
 <style>
   :root { --bg: #0b0806; --fg: #eadfce; --accent: #e8a050; --muted: #8a7f70; }
   * { box-sizing: border-box; }
@@ -23,6 +23,7 @@
   button.on { background: var(--accent); border-color: var(--accent); color: #000; }
   #bench { white-space: pre; font: 12px ui-monospace, monospace; color: #cfc; }
   #err { color: #f88; padding: 16px; }
+  .credit { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -41,9 +42,10 @@
 </div>
 <div id="controls">
   <div class="row"><span>Réseau</span><span id="widths"></span><span style="color:var(--muted)">neurones</span></div>
-  <div class="row"><span>Flamme</span><button id="flicker" class="on">vacille</button><button id="still">fixe</button></div>
+  <div class="row"><span>Déplacer</span><button id="moveCam" class="on">caméra</button><button id="moveLamp">lampe</button><button id="backlight">Contre-jour</button></div>
   <div class="row"><span>Coût</span><button id="measure">Mesurer</button><a href="selftest.html" style="color:var(--muted)">auto-test</a></div>
   <div id="bench"></div>
+  <p class="credit">Stanford Dragon — Stanford Computer Graphics Laboratory · HDRI : Poly Haven (CC0) · rendu de référence : Mitsuba 3</p>
 </div>
 <script type="module" src="src/main.js"></script>
 </body>

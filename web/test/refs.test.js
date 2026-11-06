@@ -6,12 +6,12 @@ import { nearestRefView, orbitLimits, viewDir } from "../src/refs.js";
 const cfg = JSON.parse(readFileSync(new URL("../data/config.json", import.meta.url)));
 
 test("nearest ref view", () => {
-  cfg.ref_views.forEach((v, i) => {
-    assert.equal(nearestRefView(viewDir(v), cfg.ref_views), i);
+  cfg.ref_poses.forEach((v, i) => {
+    assert.equal(nearestRefView(viewDir(v), cfg.ref_poses), i);
   });
   // slightly off view 2 still maps to 2
-  const v2 = { ...cfg.ref_views[2], az_deg: cfg.ref_views[2].az_deg + 10 };
-  assert.equal(nearestRefView(viewDir(v2), cfg.ref_views), 2);
+  const v2 = { ...cfg.ref_poses[2], az_deg: cfg.ref_poses[2].az_deg + 10 };
+  assert.equal(nearestRefView(viewDir(v2), cfg.ref_poses), 2);
 });
 
 test("viewDir az=0 el=0 points to +Z", () => {
@@ -21,10 +21,10 @@ test("viewDir az=0 el=0 points to +Z", () => {
 
 test("orbit limits match training domain", () => {
   const l = orbitLimits(cfg);
-  assert.ok(Math.abs(l.maxPolarAngle - (Math.PI / 2 + 5 * Math.PI / 180)) < 1e-9);
+  assert.ok(Math.abs(l.maxPolarAngle - (Math.PI / 2 + 3 * Math.PI / 180)) < 1e-9);
   assert.ok(Math.abs(l.minPolarAngle - (Math.PI / 2 - 60 * Math.PI / 180)) < 1e-9);
-  assert.equal(l.minDistance, 0.2);
-  assert.equal(l.maxDistance, 0.5);
+  assert.equal(l.minDistance, 0.25);
+  assert.equal(l.maxDistance, 0.6);
 });
 
 import { leaveRef, withPose } from "../src/refs.js";
