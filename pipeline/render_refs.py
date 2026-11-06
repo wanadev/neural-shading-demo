@@ -1,5 +1,5 @@
 """Path-traced reference views for the 'Path tracé' side of the curtain.
-python -m pipeline.render_refs --res 1024 --spp 4096"""
+python -m pipeline.render_refs --res 1024 --spp 2048"""
 import argparse
 import json
 import time
