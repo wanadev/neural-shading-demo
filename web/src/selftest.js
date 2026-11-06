@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { FEATURES_GLSL } from "./glsl.js";
 import { mlpGlsl } from "./mlp.js";
+import { makeNetTexture } from "./materials.js";
 
 const out = document.getElementById("out");
 const say = (s, cls) => { out.textContent = s; out.className = cls; };
@@ -74,7 +75,8 @@ function renderSamples(renderer, samples, lat, weights) {
   g.setAttribute("latB", new THREE.BufferAttribute(lb, 4, true));
   for (const [k, v] of Object.entries(attr)) g.setAttribute(k, new THREE.BufferAttribute(v, 3));
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uLatLo: { value: weights.latent_lo }, uLatHi: { value: weights.latent_hi }, uWhich: { value: 0 } },
+    uniforms: { uLatLo: { value: weights.latent_lo }, uLatHi: { value: weights.latent_hi }, uWhich: { value: 0 },
+                uNet: { value: makeNetTexture(weights) } },
     vertexShader: `
 attribute vec4 latA; attribute vec4 latB; attribute vec3 aNrm; attribute vec3 aPos; attribute vec3 aCam; attribute vec3 aLamp;
 varying vec4 vLatA; varying vec4 vLatB; varying vec3 vNrm; varying vec3 vPos; varying vec3 vCam; varying vec3 vLamp;

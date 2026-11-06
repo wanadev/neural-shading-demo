@@ -1,7 +1,15 @@
 import * as THREE from "three";
 import { CLASSIC_GLSL, FEATURES_GLSL, SH_GLSL } from "./glsl.js";
-import { mlpGlsl } from "./mlp.js";
+import { mlpGlsl, packWeights } from "./mlp.js";
 import { shadowCameraRange } from "./lamp.js";
+
+export function makeNetTexture(weights) {
+  const { data, width, height } = packWeights(weights);
+  const t = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
+}
 
 // Jade = three.js MeshPhysicalMaterial with a black diffuse (so three computes the GGX coat:
 // prefiltered room reflections + lamp highlight, Fresnel from the jade IOR) plus our SSS term
@@ -13,7 +21,7 @@ export function makeJadeMaterial({ mode, weights, classic, cfg, shared, envMap }
     specularIntensity: 1, envMap, envMapIntensity: cfg.env.scale,
   });
   const own = neural
-    ? { uLatLo: { value: weights.latent_lo }, uLatHi: { value: weights.latent_hi } }
+    ? { uLatLo: { value: weights.latent_lo }, uLatHi: { value: weights.latent_hi }, uNet: { value: makeNetTexture(weights) } }
     : {
         cW: { value: classic.w }, cK: { value: classic.k }, cP: { value: classic.p }, cDist: { value: classic.dist },
         cTintD: { value: new THREE.Vector3(...classic.tint_d) }, cTintT: { value: new THREE.Vector3(...classic.tint_t) },

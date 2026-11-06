@@ -1,38 +1,39 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mlpGlsl, glslFloat } from "../src/mlp.js";
+import { mlpGlsl, packWeights } from "../src/mlp.js";
 
-const w = JSON.parse(readFileSync(new URL("../data/weights_32.json", import.meta.url)));
+const load = (w) => JSON.parse(readFileSync(new URL(`../data/weights_${w}.json`, import.meta.url)));
 
-test("const array sizes match width, 19 inputs, 6 outputs", () => {
-  const src = mlpGlsl(w);
-  assert.match(src, /float W0\[608\]/); // 19*32
-  assert.match(src, /float W1\[1024\]/); // 32*32
-  assert.match(src, /float W2\[192\]/); // 32*6
-  assert.match(src, /float IN_MEAN\[11\]/);
+// Weights live in an RGBA32F texture: baking them as GLSL const arrays made the 64-wide shader
+// (~6k constants) crash Chrome's D3D11 shader compiler (GPU process exit, context lost).
+test("shader reads weights from a texture, no baked const arrays", () => {
+  const src = mlpGlsl(load(64));
+  assert.match(src, /uniform highp sampler2D uNet;/);
+  assert.doesNotMatch(src, /const float/);
   assert.match(src, /void neuralSSS\(float x\[19\], out vec3 envSSS, out vec3 lampSSS\)/);
+  assert.ok(src.length < 4000, `generated GLSL should stay small, got ${src.length}`);
 });
 
-test("standardization only touches the 11 raw inputs, not the latents", () => {
-  const src = mlpGlsl(w);
-  assert.match(src, /for \(int i = 0; i < 8; i\+\+\) h0\[i\] = x\[i\];/);
-  assert.match(src, /for \(int i = 0; i < 11; i\+\+\) h0\[8 \+ i\] = \(x\[8 \+ i\] - IN_MEAN\[i\]\) \/ IN_STD\[i\];/);
+test("packWeights puts every parameter where the layout says, rows padded to vec4", () => {
+  const w = load(32);
+  const { data, layout, width } = packWeights(w);
+  assert.equal(data.length % (4 * width), 0);
+  const at = (vec4Index, comp) => data[vec4Index * 4 + comp];
+  // first layer: 32 rows of 19 inputs padded to 20 (5 vec4)
+  const L0 = layout.layers[0];
+  assert.equal(L0.dinV, 5);
+  for (const [j, i] of [[0, 0], [0, 18], [31, 7], [5, 12]]) {
+    const v = L0.w + j * L0.dinV + Math.floor(i / 4);
+    assert.equal(at(v, i % 4), Math.fround(w.layers[0].W[j][i]));
+  }
+  assert.equal(at(L0.w + 0 * L0.dinV + 4, 3), 0); // padding (input 19) is zero
+  const L2 = layout.layers[2];
+  assert.equal(at(L2.b + 1, 1), Math.fround(w.layers[2].b[5])); // bias index 5 -> vec4 1, comp 1
+  assert.equal(at(layout.inMean + 2, 2), Math.fround(w.in_mean[10]));
+  assert.equal(at(layout.outCap + 1, 1), Math.fround(w.out_log_cap[5]));
 });
 
-test("every weight is emitted, row-major", () => {
-  const body = mlpGlsl(w).match(/float W0\[608\] = float\[608\]\(([^)]*)\)/)[1].split(",");
-  assert.equal(body.length, 608);
-  assert.equal(Number(body[1]), Number(glslFloat(w.layers[0].W[0][1])));
-});
-
-test("glslFloat always yields a GLSL float literal", () => {
-  for (const v of [1, -2, 0, 1e-7, -3.5e12, 0.1]) assert.match(glslFloat(v), /^-?\d+(\.\d+)?(e[+-]?\d+)?$/);
-  for (const v of [1, -2, 0]) assert.ok(glslFloat(v).includes("."));
-});
-
-test("outputs are capped like the python model", () => {
-  const src = mlpGlsl({ ...w, out_log_cap: [1, 2, 3, 4, 5, 6] });
-  assert.match(src, /float OUT_CAP\[6\]/);
-  assert.match(src, /o\[j\] = exp\(min\(s, OUT_CAP\[j\]\)\);/);
+test("same code shape for every width", () => {
+  for (const w of [16, 32, 64]) assert.match(mlpGlsl(load(w)), new RegExp(`vec4 h1\\[${w / 4}\\]`));
 });
