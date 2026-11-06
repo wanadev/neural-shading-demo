@@ -93,6 +93,8 @@ def render(view: dict, lamp, res: int, spp: int, passes=("env", "lamp"), max_pas
     m = visible.copy()  # drop silhouette pixels: their radiance mixes dragon and background
     m[1:, :] &= visible[:-1, :]; m[:-1, :] &= visible[1:, :]
     m[:, 1:] &= visible[:, :-1]; m[:, :-1] &= visible[:, 1:]
+    if "both" in out:  # Mitsuba sets alpha = 1 on envmap hits too: alpha = any geometry hit instead
+        out["both"][..., 3] = (full[..., 7] > 0).astype(np.float32)
     out.update(pos=pos, nrm=nrm / np.maximum(np.linalg.norm(nrm, axis=-1, keepdims=True), 1e-8),
                tri=np.where(hit, np.round(tri), -1).astype(np.int32), mask=m)
     if "spec" in passes:

@@ -51,4 +51,5 @@ def test_render_passes_smoke():
     assert r["env"][m].mean() > 0 and r["lamp"][m].mean() > 0
     assert r["both"].shape == (32, 32, 4)
     assert (r["both"][..., 3][m] > 0.99).all()  # dragon pixels are opaque in alpha
+    assert (r["both"][0, :, 3] < 0.01).any()  # sky above the horizon is transparent
     assert np.allclose(np.linalg.norm(r["nrm"][m], axis=1), 1, atol=1e-3)

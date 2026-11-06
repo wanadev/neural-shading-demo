@@ -1,16 +1,15 @@
-"""Error vs the path-traced references -> docs/results.md.
+"""Error vs the path-traced reference poses -> docs/results.md.
 python -m pipeline.evaluate"""
 import json
 from pathlib import Path
 
 import numpy as np
+import trimesh
 
-from pipeline.assets import WEB_DATA
 from pipeline.classic import classic_sss
-from pipeline.config import FLAME, REF_VIEWS, WIDTHS
-from pipeline.features import features
-from pipeline.render_refs import OUT
-from pipeline.scene import camera_origin
+from pipeline.config import OUT, REF_POSES, WEB_DATA, WIDTHS
+from pipeline.features import barycentric, raw_features
+from pipeline.scene import camera_origin, lamp_position
 from pipeline.train import forward_numpy
 
 RESULTS = Path(__file__).resolve().parent.parent / "docs" / "results.md"
@@ -21,7 +20,7 @@ def rel_rmse(p, y):
 
 
 def block_mean(img, mask, b=8):
-    """Average wax pixels over b x b blocks (blocks at least half wax). Removes per-pixel
+    """Average dragon pixels over b x b blocks (blocks at least half dragon). Removes per-pixel
     Monte Carlo noise of the reference so the error measures the method, not the grain."""
     n = img.shape[0] // b
     img, mask = img[: n * b, : n * b], mask[: n * b, : n * b]
@@ -32,35 +31,48 @@ def block_mean(img, mask, b=8):
 
 
 def main():
-    methods = {"classique": None, **{f"neural {w}": json.loads((WEB_DATA / f"weights_{w}.json").read_text())
-                                     for w in WIDTHS}}
+    m = trimesh.load(WEB_DATA / "dragon.ply", process=False)
+    V, F = np.asarray(m.vertices), np.asarray(m.faces)
+    cfg = json.loads((WEB_DATA / "config.json").read_text())
+    vert_th = np.frombuffer((WEB_DATA / "thickness.bin").read_bytes(), np.uint8) / 255 * cfg["thickness_max"]
+    sh = np.array(json.loads((WEB_DATA / "env_sh.json").read_text())["sh"]) * cfg["env"]["scale"]
     classic = json.loads((WEB_DATA / "classic.json").read_text())
+    nets = {w: (json.loads((WEB_DATA / f"weights_{w}.json").read_text()),
+                np.frombuffer((WEB_DATA / f"latents_{w}.bin").read_bytes(), np.uint8).reshape(-1, 8)) for w in WIDTHS}
     rows = []
-    for i, view in enumerate(REF_VIEWS):
+    for i, pose in enumerate(REF_POSES):
         r = np.load(OUT / f"ref{i}.npz")
-        m = r["mask"]
-        pos, nrm, cam = r["pos"][m], r["nrm"][m], camera_origin(view)
-        sss = r["full"] - r["spec"]
-        for name, w in methods.items():
+        msk = r["mask"]
+        pos, nrm, tri = r["pos"][msk], r["nrm"][msk], r["tri"][msk]
+        bary = barycentric(pos, V, F, tri)
+        n = len(pos)
+        cam = np.tile(camera_origin(pose), (n, 1))
+        lamp = np.tile(lamp_position(pose["lamp_az_deg"], pose["lamp_el_deg"]), (n, 1))
+        sss = r["both"][..., :3]  # null boundary: radiance on the dragon is the SSS term
+        methods = {"classique": lambda: classic_sss(nrm, pos, cam, lamp, (bary * vert_th[F[tri]]).sum(1), sh, classic)}
+        for w, (wt, q) in nets.items():
+            methods[f"neural {w}"] = lambda wt=wt, q=q: forward_numpy(wt, q, F[tri], bary, raw_features(nrm, pos, cam, lamp))
+        for name, f in methods.items():
+            out6 = f()
             pred = np.zeros_like(sss)
-            pred[m] = (classic_sss(pos, nrm, cam, np.array(FLAME["base"]), classic) if w is None
-                       else forward_numpy(w, features(pos, nrm, cam, np.zeros(3))))
-            rows.append((i, name, rel_rmse(block_mean(pred, m), block_mean(sss, m)),
-                         rel_rmse(pred[m], sss[m]),
-                         rel_rmse((pred + r["spec"])[m], r["full"][m])))
-    lines = ["# Résultats", "",
-             "Erreur RMSE relative (RMSE / moyenne de la référence) sur les pixels de cire, contre les vues",
-             "de référence path tracées (1024², 2048 spp), flamme au repos.", "",
-             "- **SSS, blocs 8×8** : pixels moyennés par blocs avant comparaison. Mesure principale : le grain",
-             "  du path tracing dans la partie sombre domine sinon l'erreur pixel à pixel.",
-             "- **SSS, pixel** et **image** (SSS + reflet) : pixel à pixel, bruit de la référence inclus.", "",
-             "| vue | méthode | SSS, blocs 8×8 | SSS, pixel | image, pixel |", "|---|---|---|---|---|"]
-    lines += [f"| {i} | {n} | {a:.3f} | {b:.3f} | {c:.3f} |" for i, n, a, b, c in rows]
-    lines += ["", "Moyenne sur les vues :", "", "| méthode | SSS, blocs 8×8 | SSS, pixel | image, pixel |",
+            pred[msk] = out6[:, :3] + out6[:, 3:]
+            rows.append((i, name, rel_rmse(block_mean(pred, msk), block_mean(sss, msk)), rel_rmse(pred[msk], sss[msk]),
+                         rel_rmse((pred + r["spec"])[msk], (sss + r["spec"])[msk])))
+    backlit = {1, 3}
+    lines = ["# Résultats — dragon de jade", "",
+             "Erreur RMSE relative (RMSE / moyenne de la référence) du SSS sur les pixels du dragon, contre les",
+             "poses de référence path tracées (caméra + lampe). Poses 1 et 3 : contre-jour.", "",
+             "- **SSS, blocs 8×8** : pixels moyennés par blocs avant comparaison (mesure principale : enlève le grain",
+             "  du path tracing).",
+             "- **SSS, pixel** et **image** (SSS + vernis) : pixel à pixel, bruit de la référence inclus.", "",
+             "| pose | méthode | SSS, blocs 8×8 | SSS, pixel | image, pixel |", "|---|---|---|---|---|"]
+    lines += [f"| {i}{' (contre-jour)' if i in backlit else ''} | {n} | {a:.3f} | {b:.3f} | {c:.3f} |" for i, n, a, b, c in rows]
+    lines += ["", "Moyennes :", "", "| méthode | SSS blocs, toutes poses | SSS blocs, contre-jour | image pixel |",
               "|---|---|---|---|"]
-    for n in methods:
-        sel = np.array([(a, b, c) for _, m_, a, b, c in rows if m_ == n]).mean(0)
-        lines.append(f"| {n} | {sel[0]:.3f} | {sel[1]:.3f} | {sel[2]:.3f} |")
+    for name in dict.fromkeys(n for _, n, *_ in rows):
+        sel = [(i, a, c) for i, n, a, _, c in rows if n == name]
+        lines.append(f"| {name} | {np.mean([a for _, a, _ in sel]):.3f} | "
+                     f"{np.mean([a for i, a, _ in sel if i in backlit]):.3f} | {np.mean([c for *_, c in sel]):.3f} |")
     RESULTS.write_text("\n".join(lines) + "\n")
     print("\n".join(lines[-6:]))
 
