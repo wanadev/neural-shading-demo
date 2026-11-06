@@ -26,3 +26,29 @@ test("orbit limits match training domain", () => {
   assert.equal(l.minDistance, 0.2);
   assert.equal(l.maxDistance, 0.5);
 });
+
+import { leaveRef, withPose } from "../src/refs.js";
+
+test("leaving the reference pose turns ref sides into neural only", () => {
+  assert.deepEqual(leaveRef({ left: "classic", right: "ref" }), { left: "classic", right: "neural" });
+  assert.deepEqual(leaveRef({ left: "ref", right: "ref" }), { left: "neural", right: "neural" });
+});
+
+test("withPose benches at a fixed pose and restores the user's camera", async () => {
+  const at = [];
+  const cam = {
+    position: { v: [9, 9, 9], clone() { return { v: [...this.v] }; }, copy(p) { this.v = [...(p.v ?? p)]; } },
+    lookAt(t) { at.push([...this.position.v]); },
+  };
+  let seen;
+  const r = await withPose(cam, [1, 2, 3], [0, 0, 0], async () => { seen = [...cam.position.v]; return 42; });
+  assert.equal(r, 42);
+  assert.deepEqual(seen, [1, 2, 3]);
+  assert.deepEqual(cam.position.v, [9, 9, 9]);
+});
+
+test("withPose restores the camera even if the benchmark throws", async () => {
+  const cam = { position: { v: [9, 9, 9], clone() { return { v: [...this.v] }; }, copy(p) { this.v = [...(p.v ?? p)]; } }, lookAt() {} };
+  await assert.rejects(withPose(cam, [1, 2, 3], [0, 0, 0], async () => { throw new Error("x"); }));
+  assert.deepEqual(cam.position.v, [9, 9, 9]);
+});

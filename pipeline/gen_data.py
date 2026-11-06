@@ -19,6 +19,21 @@ def random_view(i: int):
     return view, rng.uniform([-a, -b, -a], [a, b, a])
 
 
+def save_atomic(path, **arrays):
+    """Write to a temp file then rename: a job killed mid-write never leaves a torn shard."""
+    path = Path(path)
+    tmp = path.with_name(path.stem + ".tmp.npz")
+    try:
+        np.savez(tmp, **arrays)
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def shard_dir(out: Path, res: int, spp: int) -> Path:
+    return out.parent / f"{out.stem}_r{res}_s{spp}_shards"  # new settings never reuse old shards
+
+
 def render_view(i, res, spp) -> dict:
     view, off = random_view(i)
     r = render(view, off, res, spp)
@@ -38,14 +53,14 @@ def main(argv=None):
     p.add_argument("--out", default="pipeline/out/train.npz")
     a = p.parse_args(argv)
     out = Path(a.out)
-    shards = out.parent / f"{out.stem}_shards"
+    shards = shard_dir(out, a.res, a.spp)
     shards.mkdir(parents=True, exist_ok=True)
     for i in range(a.views):
         f = shards / f"view_{i:04d}.npz"
         if f.exists():
             continue
         t = time.time()
-        np.savez(f, **render_view(i, a.res, a.spp))
+        save_atomic(f, **render_view(i, a.res, a.spp))
         print(f"view {i + 1}/{a.views} {time.time() - t:.1f}s", flush=True)
     parts = [np.load(shards / f"view_{i:04d}.npz") for i in range(a.views)]
     np.savez(out, **{k: np.concatenate([q[k] for q in parts]) for k in parts[0].files})

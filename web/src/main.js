@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { flameUniforms, makeTableMaterial, makeWaxMaterial } from "./materials.js";
 import { flameOffset } from "./flame.js";
-import { nearestRefView, orbitLimits, viewDir } from "./refs.js";
+import { leaveRef, nearestRefView, orbitLimits, viewDir, withPose } from "./refs.js";
 import { formatHud } from "./hud.js";
 import { bench, gpuTimer } from "./bench.js";
 
@@ -100,10 +100,15 @@ async function main() {
   const q = new URLSearchParams(location.search);
   for (const side of ["left", "right"]) if (q.get(side) in LABELS) setSide(side, q.get(side));
   if (q.has("split")) state.split = THREE.MathUtils.clamp(+q.get("split") || 0.5, 0, 1);
-  // any user orbit leaves the reference pose: ref sides fall back to neural
-  controls.addEventListener("start", () => {
-    if (tween) return;
-    for (const side of ["left", "right"]) if (state.sides[side] === "ref") setSide(side, "neural");
+  // A user gesture cancels the snap tween; the first actual camera move (not a mere tap)
+  // leaves the reference pose, so "Path tracé" never stays over a moving view.
+  let orbiting = false;
+  controls.addEventListener("start", () => { tween = null; orbiting = true; });
+  controls.addEventListener("end", () => { orbiting = false; });
+  controls.addEventListener("change", () => {
+    if (!orbiting) return;
+    const next = leaveRef(state.sides);
+    for (const side of ["left", "right"]) if (next[side] !== state.sides[side]) setSide(side, next[side]);
   });
 
   $("widths").innerHTML = cfg.widths.map((w) => `<button data-w="${w}">${w}</button>`).join("");
@@ -199,12 +204,17 @@ async function main() {
     shared.uFlameIntensity.value = 1;
     const rows = [];
     const techniques = [["Classique", mats.classic], ...cfg.widths.map((w) => [`Neural ${w}`, mats[`n${w}`]])];
-    for (const [name, mat] of techniques) {
-      out.textContent = `mesure : ${name}…`;
-      candle.material = mat;
-      const ms = await bench(renderer, () => { renderer.clear(); renderer.render(scene, camera); });
-      rows.push({ technique: name, "ms / image 1024²": +ms.toFixed(3) });
-    }
+    // fixed pose (reference view 0) so numbers compare across devices whatever the user's zoom
+    const v0 = refs[0];
+    const pose = target.clone().addScaledVector(new THREE.Vector3(...viewDir(v0)), v0.radius);
+    await withPose(camera, pose, target, async () => {
+      for (const [name, mat] of techniques) {
+        out.textContent = `mesure : ${name}…`;
+        candle.material = mat;
+        const ms = await bench(renderer, () => { renderer.clear(); renderer.render(scene, camera); });
+        rows.push({ technique: name, "ms / image 1024²": +ms.toFixed(3) });
+      }
+    });
     out.textContent = `${device}\n` + rows.map((r) => `${r.technique.padEnd(10)} ${r["ms / image 1024²"].toFixed(2)} ms`).join("\n");
     console.table(rows);
     benching = false;

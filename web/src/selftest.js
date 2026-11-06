@@ -6,8 +6,10 @@ import { mlpGlsl } from "./mlp.js";
 
 const out = document.getElementById("out");
 const say = (s, cls) => { out.textContent = s; out.className = cls; };
-const json = (p) => fetch(p).then((r) => r.json());
+const json = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p} : HTTP ${r.status}`); return r.json(); });
 
+// any failure (no WebGL2, missing file, shader compile) must end in a visible verdict, never "en cours…"
+try {
 const [cfg, w16, fx] = await Promise.all([json("data/config.json"), json("data/weights_16.json"), json("data/selftest.json")]);
 const renderer = new THREE.WebGLRenderer();
 const caps = renderer.capabilities;
@@ -60,4 +62,7 @@ void main() {
   });
   const msg = `${ok === N ? "PASS" : "FAIL"} ${ok}/${N} — pire écart relatif ${worst.toExponential(2)}\n${info}`;
   say(msg, ok === N ? "pass" : "fail");
+}
+} catch (e) {
+  say(`ERREUR — ${e.message}\n(WebGL2 indisponible ou fichier manquant : le test ne peut pas conclure)`, "fail");
 }

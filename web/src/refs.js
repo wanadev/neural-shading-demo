@@ -28,3 +28,21 @@ export function orbitLimits(cfg) {
     maxDistance: rMax,
   };
 }
+
+// The user moved the camera off the reference pose: "Path tracé" sides fall back to neural.
+export const leaveRef = (sides) =>
+  Object.fromEntries(Object.entries(sides).map(([k, v]) => [k, v === "ref" ? "neural" : v]));
+
+// Run fn with the camera at a fixed pose, then restore it (cost scales with candle screen
+// coverage, so benchmarks must not depend on where the user left the camera).
+export async function withPose(camera, position, target, fn) {
+  const saved = camera.position.clone();
+  camera.position.copy(position);
+  camera.lookAt(target);
+  try {
+    return await fn();
+  } finally {
+    camera.position.copy(saved);
+    camera.lookAt(target);
+  }
+}
