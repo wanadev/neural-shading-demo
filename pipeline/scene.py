@@ -54,12 +54,16 @@ def _np(img):
     return np.array(img, dtype=np.float32)
 
 
-def render(view: dict, flame_offset: np.ndarray, res: int, spp: int) -> dict:
+def render(view: dict, flame_offset: np.ndarray, res: int, spp: int, max_pass_samples: int = 2**27) -> dict:
     flame_offset = np.asarray(flame_offset, dtype=np.float64)
     vol = mi.load_dict(dict(type="volpath", max_depth=MAX_DEPTH))
     full_scene = _scene(view, flame_offset, res, absorb=False)
-    sss_pass = _np(mi.render(full_scene, integrator=vol, spp=spp))
-    spec_pass = _np(mi.render(_scene(view, flame_offset, res, absorb=True), integrator=vol, spp=spp))
+    spec_scene = _scene(view, flame_offset, res, absorb=True)
+    # split spp into passes with distinct seeds, spp-weighted average: bounded work per call
+    per = max(1, max_pass_samples // (res * res))
+    chunks = [min(per, spp - s) for s in range(0, spp, per)]
+    avg = lambda sc: sum(_np(mi.render(sc, integrator=vol, spp=n, seed=k)) * n for k, n in enumerate(chunks)) / spp
+    sss_pass, spec_pass = avg(full_scene), avg(spec_scene)
     # AOVs at 1 spp so positions are never averaged across a silhouette
     aov = mi.load_dict(dict(type="aov", aovs="pos:position,nn:sh_normal"))
     a = _np(mi.render(full_scene, integrator=aov, spp=1))
