@@ -1,28 +1,37 @@
-"""Train the SSS MLPs and export them as JSON for the GLSL generator (web/src/mlp.js).
-python -m pipeline.train --data pipeline/out/train.npz"""
+"""Auto-decoder: a learned 8-value latent per dragon vertex + a tiny MLP, trained together.
+Output = 6 values: SSS due to the room (RGB) | SSS due to the lamp (RGB).
+python -m pipeline.train  -> web/data/weights_{w}.json, latents_{w}.bin, selftest.json"""
 import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 import torch
+import trimesh
 from torch import nn
 
-from pipeline.assets import WEB_DATA
-from pipeline.config import WIDTHS
+from pipeline.config import LATENT_DIM, WEB_DATA, WIDTHS
+from pipeline.features import raw_features
+
+N_RAW = 11
 
 
-class MLP(nn.Module):
-    """Standardized inputs -> [Linear -> relu(x)^2] x depth -> Linear(3) -> exp.
-    relu^2 is C1 (plain ReLU leaves visible creases); exp keeps the output positive."""
+class NeuralSSS(nn.Module):
+    """[latent(8) interpolated by barycentrics | standardized raw(11)] -> [Linear -> relu^2] x depth -> Linear(6) -> exp"""
 
-    def __init__(self, in_dim=17, width=16, depth=2):
+    def __init__(self, n_vertices, width, latent_dim=LATENT_DIM, depth=2):
         super().__init__()
-        dims = [in_dim] + [width] * depth
+        self.latents = nn.Parameter(torch.randn(n_vertices, latent_dim) * 0.01)
+        dims = [latent_dim + N_RAW] + [width] * depth
         self.hidden = nn.ModuleList(nn.Linear(a, b) for a, b in zip(dims, dims[1:]))
-        self.out = nn.Linear(width, 3)
+        self.out = nn.Linear(width, 6)
 
-    def forward(self, x):
+    def mlp_parameters(self):
+        return [p for n, p in self.named_parameters() if n != "latents"]
+
+    def forward(self, tri_verts, bary, raw_std, latents=None):
+        L = self.latents if latents is None else latents
+        x = torch.cat([(bary[..., None] * L[tri_verts]).sum(1), raw_std], 1)
         for l in self.hidden:
             x = torch.relu(l(x)) ** 2
         return torch.exp(self.out(x))
@@ -39,65 +48,121 @@ def rel_err(pred, y):
     return float(np.abs(pred - y).mean() / np.abs(y).mean())
 
 
-def train(npz_path, width, epochs=30, batch=4096, lr=3e-3, seed=0):
-    torch.manual_seed(seed)
+def _load(npz_path, F):
     d = np.load(npz_path)
-    X, Y = d["X"].astype(np.float32), d["Y"].astype(np.float32)
-    tr, va = _split(d["view_id"])
-    mean, std = X[tr].mean(0), X[tr].std(0) + 1e-6
-    Xs = torch.from_numpy((X - mean) / std)
-    Yt = torch.from_numpy(Y)
-    model = MLP(X.shape[1], width)
-    with torch.no_grad():
-        model.out.bias.copy_(torch.log(torch.from_numpy(np.maximum(Y[tr].mean(0), 1e-4))))
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
-    idx = np.flatnonzero(tr)
+    raw = raw_features(d["nrm"], d["pos"], d["cam"], d["lamp"])
+    Y = np.concatenate([d["Y_env"], d["Y_lamp"]], 1).astype(np.float32)
+    return d, raw, Y, np.asarray(F)[d["tri"]]
+
+
+def _fit(model, params, TV, B, R, Y, idx, epochs, batch, lr, seed, extra_groups=()):
+    opt = torch.optim.Adam([{"params": params, "lr": lr}, *extra_groups])
     steps = epochs * max(1, len(idx) // batch)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     rng = np.random.default_rng(seed)
     for _ in range(steps):
-        b = torch.from_numpy(idx[rng.integers(0, len(idx), batch)])  # with replacement: O(batch), not O(n)
-        pred = model(Xs[b])
+        b = torch.from_numpy(idx[rng.integers(0, len(idx), batch)])  # with replacement: O(batch)
+        pred = model(TV[b], B[b], R[b])
         # relative MSE (unbiased on noisy targets, unlike fitting a transformed target)
-        loss = ((pred - Yt[b]) ** 2 / (pred.detach() + 0.01) ** 2).mean()
+        loss = ((pred - Y[b]) ** 2 / (pred.detach() + 0.01) ** 2).mean()
         opt.zero_grad(); loss.backward(); opt.step(); sched.step()
+
+
+def _tensors(raw, mean, std, Y, tv, d):
+    return (torch.from_numpy(tv.astype(np.int64)), torch.from_numpy(d["bary"].astype(np.float32)),
+            torch.from_numpy(((raw - mean) / std).astype(np.float32)), torch.from_numpy(Y))
+
+
+def _val_err(model, TV, B, R, Y, va):
     with torch.no_grad():
-        err = rel_err(model(Xs[va]).numpy(), Y[va])
-    return model, mean, std, err
+        v = torch.from_numpy(np.flatnonzero(va))
+        return rel_err(model(TV[v], B[v], R[v]).numpy(), Y[v].numpy())
 
 
-def export(model, in_mean, in_std, path):
+def train(npz_path, F, n_vertices, width, epochs=30, batch=8192, lr=3e-3, seed=0):
+    torch.manual_seed(seed)
+    d, raw, Y, tv = _load(npz_path, F)
+    tr, va = _split(d["view_id"])
+    mean, std = raw[tr].mean(0), raw[tr].std(0) + 1e-6
+    TV, B, R, Yt = _tensors(raw, mean, std, Y, tv, d)
+    model = NeuralSSS(n_vertices, width)
+    with torch.no_grad():
+        model.out.bias.copy_(torch.log(torch.from_numpy(np.maximum(Y[tr].mean(0), 1e-4))))
+    _fit(model, model.mlp_parameters(), TV, B, R, Yt, np.flatnonzero(tr), epochs, batch, lr, seed,
+         extra_groups=[{"params": [model.latents], "lr": lr * 3}])
+    return model, mean, std, _val_err(model, TV, B, R, Yt, va)
+
+
+def quantize(latents):
+    x = np.asarray(latents.detach() if torch.is_tensor(latents) else latents, np.float32)
+    lo, hi = x.min(0), x.max(0)
+    hi = np.where(hi - lo < 1e-8, lo + 1e-8, hi)
+    q = np.round((x - lo) / (hi - lo) * 255).clip(0, 255).astype(np.uint8)
+    return q, lo.astype(np.float32), hi.astype(np.float32)
+
+
+def finetune_quantized(model, npz_path, F, mean, std, epochs=5, batch=8192, lr=1e-3, seed=1):
+    """Freeze the latents at their 8-bit values and refit the MLP to them."""
+    q, lo, hi = quantize(model.latents)
+    with torch.no_grad():
+        model.latents.copy_(torch.from_numpy(lo + (hi - lo) * q.astype(np.float32) / 255))
+    model.latents.requires_grad_(False)
+    d, raw, Y, tv = _load(npz_path, F)
+    tr, va = _split(d["view_id"])
+    TV, B, R, Yt = _tensors(raw, mean, std, Y, tv, d)
+    _fit(model, model.mlp_parameters(), TV, B, R, Yt, np.flatnonzero(tr), epochs, batch, lr, seed)
+    return q, lo, hi, _val_err(model, TV, B, R, Yt, va)
+
+
+def export(model, in_mean, in_std, lo, hi, json_path, bin_path):
+    q = np.round((model.latents.detach().numpy() - lo) / (hi - lo) * 255).clip(0, 255).astype(np.uint8)
     layers = list(model.hidden) + [model.out]
-    w = dict(width=model.out.in_features, in_mean=np.asarray(in_mean).tolist(), in_std=np.asarray(in_std).tolist(),
+    w = dict(width=model.out.in_features, latent_dim=int(q.shape[1]), latent_lo=np.asarray(lo).tolist(),
+             latent_hi=np.asarray(hi).tolist(), in_mean=np.asarray(in_mean).tolist(), in_std=np.asarray(in_std).tolist(),
              layers=[dict(W=l.weight.detach().numpy().tolist(), b=l.bias.detach().numpy().tolist()) for l in layers])
-    Path(path).write_text(json.dumps(w))
+    Path(json_path).write_text(json.dumps(w))
+    Path(bin_path).write_bytes(q.tobytes())
 
 
-def forward_numpy(weights: dict, x_raw) -> np.ndarray:
-    h = (np.asarray(x_raw, np.float64) - weights["in_mean"]) / np.asarray(weights["in_std"])
+def forward_numpy(weights: dict, q_latents, tri_verts, bary, raw) -> np.ndarray:
+    lo, hi = np.array(weights["latent_lo"]), np.array(weights["latent_hi"])
+    L = lo + (hi - lo) * np.asarray(q_latents, np.float64) / 255
+    lat = (np.asarray(bary, np.float64)[..., None] * L[np.asarray(tri_verts)]).sum(1)
+    h = np.concatenate([lat, (np.asarray(raw, np.float64) - weights["in_mean"]) / np.asarray(weights["in_std"])], 1)
     *hidden, out = weights["layers"]
     for l in hidden:
         h = np.maximum(h @ np.array(l["W"]).T + l["b"], 0) ** 2
     return np.exp(h @ np.array(out["W"]).T + out["b"])
 
 
+def selftest_samples(d, n, seed=1):
+    """Validation samples whose third barycentric is >= 0.2: the GPU selftest draws one small
+    triangle per sample and needs b2 away from 0."""
+    _, va = _split(d["view_id"])
+    ok = np.flatnonzero(va & (d["bary"][:, 2] >= 0.2))
+    return np.random.default_rng(seed).choice(ok, n, replace=False)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--data", default="pipeline/out/train.npz")
+    p.add_argument("--data", default="pipeline/out/dragon_train.npz")
     p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--ft-epochs", type=int, default=5)
     a = p.parse_args(argv)
+    m = trimesh.load(WEB_DATA / "dragon.ply", process=False)
+    F, nv = np.asarray(m.faces), len(m.vertices)
+    d, raw, _, tv = _load(a.data, F)
+    pick = selftest_samples(d, 32)
+    fx = dict(samples=[dict(tri_verts=tv[i].tolist(), bary=d["bary"][i].tolist(), nrm=d["nrm"][i].tolist(),
+                            pos=d["pos"][i].tolist(), cam=d["cam"][i].tolist(), lamp=d["lamp"][i].tolist()) for i in pick],
+              expected={})
     for w in WIDTHS:
-        model, mean, std, err = train(a.data, w, a.epochs)
-        export(model, mean, std, WEB_DATA / f"weights_{w}.json")
-        print(f"width {w}: val rel err {err:.4f}", flush=True)
-    # GLSL parity fixture: 64 validation samples through the width-16 network
-    d = np.load(a.data)
-    _, va = _split(d["view_id"])
-    pick = np.random.default_rng(1).choice(np.flatnonzero(va), 64, replace=False)
-    w16 = json.loads((WEB_DATA / "weights_16.json").read_text())
-    exp = forward_numpy(w16, d["X"][pick])
-    fx = [dict(pos=d["pos"][i].tolist(), nrm=d["nrm"][i].tolist(), cam=d["cam"][i].tolist(),
-               flame_offset=d["offset"][i].tolist(), expected=e.tolist()) for i, e in zip(pick, exp)]
+        model, mean, std, err = train(a.data, F, nv, w, a.epochs)
+        q, lo, hi, err_q = finetune_quantized(model, a.data, F, mean, std, a.ft_epochs)
+        export(model, mean, std, lo, hi, WEB_DATA / f"weights_{w}.json", WEB_DATA / f"latents_{w}.bin")
+        weights = json.loads((WEB_DATA / f"weights_{w}.json").read_text())
+        fx["expected"][str(w)] = forward_numpy(weights, q, tv[pick], d["bary"][pick], raw[pick]).tolist()
+        print(f"width {w}: val rel err {err:.4f} float, {err_q:.4f} 8-bit latents", flush=True)
     (WEB_DATA / "selftest.json").write_text(json.dumps(fx))
 
 
