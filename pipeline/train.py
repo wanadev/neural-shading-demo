@@ -54,10 +54,15 @@ def rel_err(pred, y):
     return float(np.abs(pred - y).mean() / np.abs(y).mean())
 
 
+def clamp_fireflies(Y, pct=99.99, factor=1.5):
+    """Clip isolated Monte Carlo spikes: per channel, at factor x the pct-th percentile."""
+    return np.minimum(Y, factor * np.percentile(Y, pct, axis=0)).astype(np.float32)
+
+
 def _load(npz_path, F):
     d = np.load(npz_path)
     raw = raw_features(d["nrm"], d["pos"], d["cam"], d["lamp"])
-    Y = np.concatenate([d["Y_env"], d["Y_lamp"]], 1).astype(np.float32)
+    Y = clamp_fireflies(np.concatenate([d["Y_env"], d["Y_lamp"]], 1))
     return d, raw, Y, np.asarray(F)[d["tri"]]
 
 

@@ -86,3 +86,14 @@ def test_output_is_capped(tmp_path):
     q = np.frombuffer((tmp_path / "l.bin").read_bytes(), np.uint8).reshape(10, 8)
     p = forward_numpy(w, q, np.zeros((4, 3), int), np.full((4, 3), 1 / 3), np.zeros((4, 11)))
     assert np.all(p <= 2.0 * (1 + 1e-5)) and len(w["out_log_cap"]) == 6
+
+
+def test_firefly_targets_are_clamped():
+    # 115 of 2.7M lamp targets were Monte Carlo fireflies up to 1770 (99.99th pct: 7.7); left in,
+    # they wrecked the backlit reference pose
+    from pipeline.train import clamp_fireflies
+    rng = np.random.default_rng(0)
+    Y = rng.normal(1, 0.1, (100_000, 6)).astype(np.float32)
+    Y[:5, 3] = 1000.0
+    C = clamp_fireflies(Y)
+    assert C.max() < 3 and np.allclose(C[5:], Y[5:])

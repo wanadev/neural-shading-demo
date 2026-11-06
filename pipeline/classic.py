@@ -11,7 +11,7 @@ import trimesh
 
 from pipeline.config import WEB_DATA
 from pipeline.env import sh_basis
-from pipeline.train import _split, rel_err
+from pipeline.train import _split, clamp_fireflies, rel_err
 
 KEYS3 = ("tint_d", "tint_t", "tint_e", "tint_eb")
 
@@ -55,7 +55,7 @@ def fit_classic(npz_path, F=None, vert_th=None, sh=None, steps=3000, lr=0.03, se
         F, vert_th, sh = _load_defaults()
     d = np.load(npz_path)
     th = (d["bary"] * np.asarray(vert_th)[np.asarray(F)[d["tri"]]]).sum(1)
-    Y = np.concatenate([d["Y_env"], d["Y_lamp"]], 1)
+    Y = clamp_fireflies(np.concatenate([d["Y_env"], d["Y_lamp"]], 1))  # same targets as the network
     tr, va = _split(d["view_id"])
     if tr.sum() > max_train:  # full-batch fit of ~15 parameters: a fixed random subset is plenty
         keep = np.random.default_rng(seed).choice(np.flatnonzero(tr), max_train, replace=False)
