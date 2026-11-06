@@ -76,7 +76,9 @@ Auto-test GPU (`selftest.html`) : PASS 32/32 pour 16, 32 et 64 en Chromium/Swift
   Schlick) ; la référence utilise l'intégration exacte.
 - Pas de shadow map sur le dragon : ses ombres sur lui-même viennent du réseau. Quelques taches
   sombres restent visibles sur la tête à certaines poses.
-- La lueur verte projetée sur le sol n'existe que dans la référence ; le reflet de l'ampoule sur le sol
-  est un peu plus marqué dans three.js.
+- La lueur verte projetée sur le sol n'existe que dans la référence.
+- Bug instructif trouvé en revue : la caméra d'ombre de la lampe (three.js, near = 0,5 m par défaut)
+  coupait tout le dragon, qui ne projetait donc aucune ombre — on l'avait pris pour « un reflet un peu
+  fort ». La comparaison avec la référence path tracée l'a rendu évident.
 - Réseau appris pour **ce** dragon, cette pièce et cette lampe (position libre, intensité fixe).
 - Crédits : Stanford Dragon — Stanford Computer Graphics Laboratory ; HDRI « anniversary_lounge » — Poly Haven (CC0).
