@@ -25,3 +25,13 @@ def test_ply_roundtrip_keeps_vertex_order(tmp_path):  # Review Focus #2
     write_ply(tmp_path / "d.ply", V, F, N)
     m = trimesh.load(tmp_path / "d.ply", process=False)
     assert np.allclose(m.vertices, V) and (m.faces == F).all()
+
+
+def test_cli_never_overwrites_existing_mesh(tmp_path):
+    # decimation is not bit-reproducible: regenerating would silently reorder vertices under
+    # every per-vertex file (latents, thickness, training data)
+    from pipeline.dragon import main
+    f = tmp_path / "dragon.ply"
+    f.write_bytes(b"keep me")
+    main(["--out", str(tmp_path)])
+    assert f.read_bytes() == b"keep me"

@@ -1,14 +1,15 @@
 """Stanford dragon -> closed, decimated, scaled mesh shared by Mitsuba and three.js.
-python -m pipeline.dragon   (downloads into pipeline/out/dragon/, writes web/data/dragon.ply + config.json)"""
-import json
+python -m pipeline.dragon   (downloads into pipeline/out/dragon/, writes web/data/dragon.ply once)"""
+import argparse
 import tarfile
 import urllib.request
+from pathlib import Path
 
 import pymeshlab
 import numpy as np
 import trimesh
 
-from pipeline.config import DRAGON, OUT, WEB_DATA, to_json
+from pipeline.config import DRAGON, OUT, WEB_DATA
 
 
 def load_dragon(ply_path) -> trimesh.Trimesh:
@@ -57,7 +58,15 @@ def write_ply(path, V, F, N):
         f.write(face.tobytes())
 
 
-def main():
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument("--out", default=str(WEB_DATA))
+    p.add_argument("--force", action="store_true", help="regenerate: invalidates latents, thickness, training data")
+    a = p.parse_args(argv)
+    dst = Path(a.out) / "dragon.ply"
+    if dst.exists() and not a.force:  # decimation is not bit-reproducible: never replace silently
+        print(f"{dst} exists, keeping it (use --force to regenerate everything downstream)")
+        return
     d = OUT / "dragon"
     d.mkdir(parents=True, exist_ok=True)
     tgz = d / "dragon_recon.tar.gz"
@@ -68,9 +77,8 @@ def main():
         with tarfile.open(tgz) as t:
             t.extract(DRAGON["member"], d, filter="data")
     V, F, N = prepare(load_dragon(src), DRAGON["target_faces"], DRAGON["height"])
-    WEB_DATA.mkdir(parents=True, exist_ok=True)
-    write_ply(WEB_DATA / "dragon.ply", V, F, N)
-    (WEB_DATA / "config.json").write_text(json.dumps(to_json(), indent=1))
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    write_ply(dst, V, F, N)
     print(f"dragon: {len(V)} vertices, {len(F)} faces")
 
 
