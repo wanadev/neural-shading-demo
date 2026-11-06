@@ -1,19 +1,28 @@
 """Single source of truth shared by Mitsuba and three.js (exported to web/data/config.json).
-Units: metres. Y up. Candle base at y=0."""
+Units: metres. Y up. Dragon standing on the ground (y=0)."""
+from pathlib import Path
 
-CANDLE = dict(radius=0.035, height=0.10, cup_depth=0.006, rim_radius=0.003,
-              wobble=0.0008, seed=7, segments=128, rings=96)
-FLAME = dict(base=(0.0, 0.110, 0.0), sphere_radius=0.003, radiance=(400.0, 220.0, 80.0),
-             flicker_xz=0.003, flicker_y=0.002, intensity_range=(0.8, 1.2))
-WAX = dict(ior=1.44, roughness=0.1, sigma_t=400.0, albedo=(0.995, 0.99, 0.975))
-TABLE = dict(size=1.0, albedo=(0.08, 0.06, 0.05))
-CAMERA = dict(fov_y=35.0, target=(0.0, 0.06, 0.0), radius=(0.2, 0.5), elevation_deg=(-5.0, 60.0))
-EXPOSURE = 3.0
-REF_VIEWS = [dict(az_deg=30, el_deg=15, radius=0.3), dict(az_deg=120, el_deg=35, radius=0.3),
-             dict(az_deg=220, el_deg=5, radius=0.3), dict(az_deg=300, el_deg=55, radius=0.3)]
-WIDTHS = (8, 16, 32)
+WEB_DATA = Path(__file__).resolve().parent.parent / "web" / "data"
+OUT = Path(__file__).resolve().parent / "out"
+
+DRAGON = dict(url="https://graphics.stanford.edu/pub/3Dscanrep/dragon/dragon_recon.tar.gz",
+              member="dragon_recon/dragon_vrip.ply", target_faces=80_000, height=0.15)
+JADE = dict(ior=1.61, roughness=0.08, sigma_t=600.0, albedo=(0.90, 0.985, 0.93))
+LAMP = dict(center=(0.0, 0.07, 0.0), radius=0.25, sphere_radius=0.008, radiance=(3000.0, 2700.0, 2300.0),
+            elevation_deg=(-10.0, 70.0))
+ENV = dict(name="anniversary_lounge", scale=0.4)
+GROUND = dict(size=4.0, albedo=(0.03, 0.03, 0.03), roughness=0.3)
+CAMERA = dict(fov_y=30.0, target=(0.0, 0.07, 0.0), radius=(0.25, 0.6), elevation_deg=(-3.0, 60.0))
+EXPOSURE = 1.0
+REF_POSES = [dict(az_deg=30, el_deg=15, radius=0.4, lamp_az_deg=60, lamp_el_deg=35),
+             dict(az_deg=120, el_deg=10, radius=0.4, lamp_az_deg=300, lamp_el_deg=20),   # backlit
+             dict(az_deg=220, el_deg=30, radius=0.4, lamp_az_deg=170, lamp_el_deg=50),
+             dict(az_deg=300, el_deg=5, radius=0.4, lamp_az_deg=120, lamp_el_deg=15)]    # backlit
+WIDTHS = (16, 32, 64)
+LATENT_DIM = 8
 
 
 def to_json() -> dict:
-    return dict(candle=CANDLE, flame=FLAME, wax=WAX, table=TABLE, camera=CAMERA,
-                exposure=EXPOSURE, ref_views=REF_VIEWS, widths=list(WIDTHS))
+    return dict(dragon=dict(height=DRAGON["height"]), jade=JADE, lamp=LAMP, env=ENV, ground=GROUND,
+                camera=CAMERA, exposure=EXPOSURE, ref_poses=REF_POSES, widths=list(WIDTHS),
+                latent_dim=LATENT_DIM)

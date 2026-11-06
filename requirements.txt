@@ -2,3 +2,5 @@ mitsuba==3.9.1
 torch
 numpy
 pytest
+trimesh
+pymeshlab

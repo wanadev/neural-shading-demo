@@ -1,93 +1,99 @@
 {
- "candle": {
-  "radius": 0.035,
-  "height": 0.1,
-  "cup_depth": 0.006,
-  "rim_radius": 0.003,
-  "wobble": 0.0008,
-  "seed": 7,
-  "segments": 128,
-  "rings": 96
+ "dragon": {
+  "height": 0.15
  },
- "flame": {
-  "base": [
+ "jade": {
+  "ior": 1.61,
+  "roughness": 0.08,
+  "sigma_t": 600.0,
+  "albedo": [
+   0.9,
+   0.985,
+   0.93
+  ]
+ },
+ "lamp": {
+  "center": [
    0.0,
-   0.11,
+   0.07,
    0.0
   ],
-  "sphere_radius": 0.003,
+  "radius": 0.25,
+  "sphere_radius": 0.008,
   "radiance": [
-   400.0,
-   220.0,
-   80.0
+   3000.0,
+   2700.0,
+   2300.0
   ],
-  "flicker_xz": 0.003,
-  "flicker_y": 0.002,
-  "intensity_range": [
-   0.8,
-   1.2
+  "elevation_deg": [
+   -10.0,
+   70.0
   ]
  },
- "wax": {
-  "ior": 1.44,
-  "roughness": 0.1,
-  "sigma_t": 400.0,
-  "albedo": [
-   0.995,
-   0.99,
-   0.975
-  ]
+ "env": {
+  "name": "anniversary_lounge",
+  "scale": 0.4
  },
- "table": {
-  "size": 1.0,
+ "ground": {
+  "size": 4.0,
   "albedo": [
-   0.08,
-   0.06,
-   0.05
-  ]
+   0.03,
+   0.03,
+   0.03
+  ],
+  "roughness": 0.3
  },
  "camera": {
-  "fov_y": 35.0,
+  "fov_y": 30.0,
   "target": [
    0.0,
-   0.06,
+   0.07,
    0.0
   ],
   "radius": [
-   0.2,
-   0.5
+   0.25,
+   0.6
   ],
   "elevation_deg": [
-   -5.0,
+   -3.0,
    60.0
   ]
  },
- "exposure": 3.0,
- "ref_views": [
+ "exposure": 1.0,
+ "ref_poses": [
   {
    "az_deg": 30,
    "el_deg": 15,
-   "radius": 0.3
+   "radius": 0.4,
+   "lamp_az_deg": 60,
+   "lamp_el_deg": 35
   },
   {
    "az_deg": 120,
-   "el_deg": 35,
-   "radius": 0.3
+   "el_deg": 10,
+   "radius": 0.4,
+   "lamp_az_deg": 300,
+   "lamp_el_deg": 20
   },
   {
    "az_deg": 220,
-   "el_deg": 5,
-   "radius": 0.3
+   "el_deg": 30,
+   "radius": 0.4,
+   "lamp_az_deg": 170,
+   "lamp_el_deg": 50
   },
   {
    "az_deg": 300,
-   "el_deg": 55,
-   "radius": 0.3
+   "el_deg": 5,
+   "radius": 0.4,
+   "lamp_az_deg": 120,
+   "lamp_el_deg": 15
   }
  ],
  "widths": [
-  8,
   16,
-  32
- ]
+  32,
+  64
+ ],
+ "latent_dim": 8
 }
