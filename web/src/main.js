@@ -7,6 +7,15 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { Pass } from "three/addons/postprocessing/Pass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+
+// Sensor saturation before bloom: the bulb's radiance (thousands) would otherwise wash the whole
+// frame white. Applied to the composed frame, so both curtain sides get the same treatment.
+const ClampShader = {
+  uniforms: { tDiffuse: { value: null }, uMax: { value: 10.0 } },
+  vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+  fragmentShader: "uniform sampler2D tDiffuse; uniform float uMax; varying vec2 vUv; void main() { vec4 c = texture2D(tDiffuse, vUv); gl_FragColor = vec4(min(c.rgb, vec3(uMax)), c.a); }",
+};
 import { makeGround, makeJadeMaterial, makeLamp, setJadeAttributes } from "./materials.js";
 import { backlight, clampLamp, lampPosition } from "./lamp.js";
 import { leaveRef, nearestRefView, orbitLimits, viewDir, withPose } from "./refs.js";
@@ -146,6 +155,13 @@ async function main() {
     }
   }
   const q = new URLSearchParams(location.search);
+  const qp = Number.parseInt(q.get("pose"), 10);  // deep link: start at a reference pose (camera + lamp)
+  if (qp >= 0 && qp < cfg.ref_poses.length) {
+    const pose = cfg.ref_poses[qp];
+    camera.position.copy(posOf(pose));
+    controls.update();
+    setLamp({ az_deg: pose.lamp_az_deg, el_deg: pose.lamp_el_deg });
+  }
   for (const side of ["left", "right"]) if (Object.hasOwn(LABELS, q.get(side) ?? "")) setSide(side, q.get(side));
   if (q.has("split") && Number.isFinite(+q.get("split"))) state.split = THREE.MathUtils.clamp(+q.get("split"), 0, 1);
   if (q.has("lamp")) { const [az, el] = q.get("lamp").split(",").map(Number); if (Number.isFinite(az) && Number.isFinite(el)) setLamp({ az_deg: az, el_deg: el }); }
@@ -240,8 +256,9 @@ async function main() {
   let composer = null, bloom = null;
   if (pipeline === "hdr") {
     composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
-    bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.5, 1.2);
+    bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.12, 0.3, 3.0);
     composer.addPass(new CurtainPass());
+    composer.addPass(new ShaderPass(ClampShader));
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
   }
