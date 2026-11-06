@@ -95,5 +95,6 @@
   32,
   64
  ],
- "latent_dim": 8
+ "latent_dim": 8,
+ "thickness_max": 0.06425842642784119
 }

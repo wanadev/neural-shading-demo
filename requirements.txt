@@ -4,3 +4,4 @@ numpy
 pytest
 trimesh
 pymeshlab
+scipy
