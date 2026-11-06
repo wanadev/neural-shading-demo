@@ -70,3 +70,19 @@ def test_selftest_samples_avoid_degenerate_triangles(tmp_path):
     d = np.load(p)
     idx = selftest_samples(d, 32)
     assert len(idx) == 32 and (d["bary"][idx, 2] >= 0.2).all()
+
+
+def test_output_is_capped(tmp_path):
+    # an unbounded exp() let a few samples reach 3600 when targets peak at 59 (val error x2)
+    m = NeuralSSS(10, 16)
+    m.set_output_cap(np.full(6, 2.0))
+    with torch.no_grad():
+        m.out.bias.fill_(50.0)
+        y = m(torch.zeros(4, 3, dtype=torch.long), torch.full((4, 3), 1 / 3), torch.zeros(4, 11))
+    assert torch.all(y <= 2.0 * (1 + 1e-5))
+    _, lo, hi = quantize(m.latents.detach())
+    export(m, np.zeros(11), np.ones(11), lo, hi, tmp_path / "w.json", tmp_path / "l.bin")
+    w = json.loads((tmp_path / "w.json").read_text())
+    q = np.frombuffer((tmp_path / "l.bin").read_bytes(), np.uint8).reshape(10, 8)
+    p = forward_numpy(w, q, np.zeros((4, 3), int), np.full((4, 3), 1 / 3), np.zeros((4, 11)))
+    assert np.all(p <= 2.0 * (1 + 1e-5)) and len(w["out_log_cap"]) == 6

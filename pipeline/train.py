@@ -25,6 +25,12 @@ class NeuralSSS(nn.Module):
         dims = [latent_dim + N_RAW] + [width] * depth
         self.hidden = nn.ModuleList(nn.Linear(a, b) for a, b in zip(dims, dims[1:]))
         self.out = nn.Linear(width, 6)
+        self.register_buffer("log_cap", torch.full((6,), 80.0))
+
+    def set_output_cap(self, cap):
+        """Bound exp(): without it a few unseen input combinations produced values 60x the
+        brightest target and dominated the error (and would show as fireflies)."""
+        self.log_cap.copy_(torch.log(torch.as_tensor(np.asarray(cap, np.float32))))
 
     def mlp_parameters(self):
         return [p for n, p in self.named_parameters() if n != "latents"]
@@ -34,7 +40,7 @@ class NeuralSSS(nn.Module):
         x = torch.cat([(bary[..., None] * L[tri_verts]).sum(1), raw_std], 1)
         for l in self.hidden:
             x = torch.relu(l(x)) ** 2
-        return torch.exp(self.out(x))
+        return torch.exp(torch.minimum(self.out(x), self.log_cap))
 
 
 def _split(view_id, frac=0.1, seed=0):
@@ -86,6 +92,7 @@ def train(npz_path, F, n_vertices, width, epochs=30, batch=8192, lr=3e-3, seed=0
     mean, std = raw[tr].mean(0), raw[tr].std(0) + 1e-6
     TV, B, R, Yt = _tensors(raw, mean, std, Y, tv, d)
     model = NeuralSSS(n_vertices, width)
+    model.set_output_cap(1.2 * Y[tr].max(0))
     with torch.no_grad():
         model.out.bias.copy_(torch.log(torch.from_numpy(np.maximum(Y[tr].mean(0), 1e-4))))
     _fit(model, model.mlp_parameters(), TV, B, R, Yt, np.flatnonzero(tr), epochs, batch, lr, seed,
@@ -118,7 +125,7 @@ def export(model, in_mean, in_std, lo, hi, json_path, bin_path):
     q = np.round((model.latents.detach().numpy() - lo) / (hi - lo) * 255).clip(0, 255).astype(np.uint8)
     layers = list(model.hidden) + [model.out]
     w = dict(width=model.out.in_features, latent_dim=int(q.shape[1]), latent_lo=np.asarray(lo).tolist(),
-             latent_hi=np.asarray(hi).tolist(), in_mean=np.asarray(in_mean).tolist(), in_std=np.asarray(in_std).tolist(),
+             latent_hi=np.asarray(hi).tolist(), out_log_cap=model.log_cap.tolist(), in_mean=np.asarray(in_mean).tolist(), in_std=np.asarray(in_std).tolist(),
              layers=[dict(W=l.weight.detach().numpy().tolist(), b=l.bias.detach().numpy().tolist()) for l in layers])
     Path(json_path).write_text(json.dumps(w))
     Path(bin_path).write_bytes(q.tobytes())
@@ -132,7 +139,7 @@ def forward_numpy(weights: dict, q_latents, tri_verts, bary, raw) -> np.ndarray:
     *hidden, out = weights["layers"]
     for l in hidden:
         h = np.maximum(h @ np.array(l["W"]).T + l["b"], 0) ** 2
-    return np.exp(h @ np.array(out["W"]).T + out["b"])
+    return np.exp(np.minimum(h @ np.array(out["W"]).T + out["b"], weights.get("out_log_cap", 80.0)))
 
 
 def selftest_samples(d, n, seed=1):

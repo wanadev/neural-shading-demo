@@ -30,3 +30,9 @@ test("glslFloat always yields a GLSL float literal", () => {
   for (const v of [1, -2, 0, 1e-7, -3.5e12, 0.1]) assert.match(glslFloat(v), /^-?\d+(\.\d+)?(e[+-]?\d+)?$/);
   for (const v of [1, -2, 0]) assert.ok(glslFloat(v).includes("."));
 });
+
+test("outputs are capped like the python model", () => {
+  const src = mlpGlsl({ ...w, out_log_cap: [1, 2, 3, 4, 5, 6] });
+  assert.match(src, /float OUT_CAP\[6\]/);
+  assert.match(src, /o\[j\] = exp\(min\(s, OUT_CAP\[j\]\)\);/);
+});

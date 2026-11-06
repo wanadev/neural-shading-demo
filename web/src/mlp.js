@@ -11,7 +11,7 @@ const arr = (name, vals) => `const float ${name}[${vals.length}] = float[${vals.
 
 export function mlpGlsl(w) {
   const L = w.layers, nRaw = w.in_mean.length, nIn = L[0].W[0].length, nLat = nIn - nRaw;
-  const decl = [arr("IN_MEAN", w.in_mean), arr("IN_STD", w.in_std)];
+  const decl = [arr("IN_MEAN", w.in_mean), arr("IN_STD", w.in_std), arr("OUT_CAP", w.out_log_cap ?? L.at(-1).b.map(() => 80))];
   L.forEach((l, k) => decl.push(arr(`W${k}`, l.W.flat()), arr(`B${k}`, l.b)));
   const dims = [nIn, ...L.map((l) => l.b.length)];
   const body = [
@@ -36,7 +36,7 @@ export function mlpGlsl(w) {
     `for (int j = 0; j < ${nOut}; j++) {`,
     `  float s = B${k}[j];`,
     `  for (int i = 0; i < ${din}; i++) s += W${k}[j * ${din} + i] * h${k}[i];`,
-    `  o[j] = exp(s);`,
+    `  o[j] = exp(min(s, OUT_CAP[j]));`,
     `}`,
     `envSSS = vec3(o[0], o[1], o[2]);`,
     `lampSSS = vec3(o[3], o[4], o[5]);`,
