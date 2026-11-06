@@ -1,107 +1,106 @@
 import * as THREE from "three";
-import { CHORD_GLSL, COAT_GLSL, FEATURES_GLSL } from "./glsl.js";
+import { CLASSIC_GLSL, FEATURES_GLSL, SH_GLSL } from "./glsl.js";
 import { mlpGlsl } from "./mlp.js";
 
-const VERT = /* glsl */ `
-varying vec3 vPos;
-varying vec3 vNrm;
-void main() {
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vPos = wp.xyz;
-  vNrm = mat3(modelMatrix) * normal;
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}
-`;
-
-// Uniforms shared by every material, updated once per frame by main.js.
-export function flameUniforms(cfg) {
-  const r = cfg.flame.sphere_radius;
-  // sphere area light of radiance Le == point light of intensity Le * pi * r^2
-  const I = new THREE.Vector3(...cfg.flame.radiance).multiplyScalar(Math.PI * r * r);
-  return {
-    uFlameBase: { value: new THREE.Vector3(...cfg.flame.base) },
-    uFlameOffset: { value: new THREE.Vector3() },
-    uFlameIntensity: { value: 1 },
-    uFlameI: { value: I },
-  };
-}
-
-// mode: "neural" (needs weights) | "classic" (needs classic params)
-export function makeWaxMaterial({ mode, weights, classic, cfg, shared }) {
+// Jade = three.js MeshPhysicalMaterial with a black diffuse (so three computes the GGX coat:
+// prefiltered room reflections + lamp highlight, Fresnel from the jade IOR) plus our SSS term
+// injected as emissive radiance. Mitsuba alpha = three roughness^2.
+export function makeJadeMaterial({ mode, weights, classic, cfg, shared, envMap }) {
   const neural = mode === "neural";
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      ...shared,
-      uIor: { value: cfg.wax.ior },
-      uAlpha: { value: cfg.wax.roughness },
-      uR: { value: cfg.candle.radius },
-      uH: { value: cfg.candle.height },
-      cW: { value: classic?.w ?? 0 }, cK: { value: classic?.k ?? 0 },
-      cA: { value: classic?.a ?? 0 }, cB: { value: classic?.b ?? 0 },
-      cTint: { value: new THREE.Vector3(...(classic?.tint ?? [0, 0, 0])) },
-    },
-    vertexShader: VERT,
-    fragmentShader: /* glsl */ `
-precision highp float;
-uniform vec3 uFlameBase, uFlameOffset, uFlameI;
-uniform float uFlameIntensity, uIor, uAlpha, uR, uH;
-uniform float cW, cK, cA, cB;
-uniform vec3 cTint;
-varying vec3 vPos;
-varying vec3 vNrm;
-${FEATURES_GLSL}
-${CHORD_GLSL}
-${COAT_GLSL}
-${neural ? mlpGlsl(weights) : ""}
-void main() {
-  vec3 n = normalize(vNrm);
-  vec3 flame = uFlameBase + uFlameOffset;
-  vec3 toL = flame - vPos;
-#ifdef NEURAL
-  float x[17];
-  features(vPos, n, cameraPosition, uFlameOffset, uFlameBase, x);
-  vec3 sss = neuralSSS(x);
-#else
-  float d = length(toL);
-  float wrap = max((dot(n, toL / d) + cW) / (1.0 + cW), 0.0);
-  vec3 sss = cTint / (d * d) * (cA * wrap + cB * exp(-cK * chordToFlame(vPos, flame, uR, uH)));
-#endif
-  vec3 spec = coatSpec(n, normalize(cameraPosition - vPos), toL, uIor, uAlpha) * uFlameI;
-  gl_FragColor = vec4((sss + spec) * uFlameIntensity, 1.0);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-}`,
-    defines: neural ? { NEURAL: "" } : {},
+  const m = new THREE.MeshPhysicalMaterial({
+    color: 0x000000, metalness: 0, roughness: Math.sqrt(cfg.jade.roughness), ior: cfg.jade.ior,
+    specularIntensity: 1, envMap, envMapIntensity: cfg.env.scale,
   });
+  const own = neural
+    ? { uLatLo: { value: weights.latent_lo }, uLatHi: { value: weights.latent_hi } }
+    : {
+        cW: { value: classic.w }, cK: { value: classic.k }, cP: { value: classic.p }, cDist: { value: classic.dist },
+        cTintD: { value: new THREE.Vector3(...classic.tint_d) }, cTintT: { value: new THREE.Vector3(...classic.tint_t) },
+        cTintE: { value: new THREE.Vector3(...classic.tint_e) }, cTintEB: { value: new THREE.Vector3(...classic.tint_eb) },
+        uThickMax: { value: cfg.thickness_max },
+      };
+  m.onBeforeCompile = (s) => {
+    Object.assign(s.uniforms, shared, own);
+    s.vertexShader = s.vertexShader
+      .replace("#include <common>", `#include <common>
+attribute vec4 latA;
+attribute vec4 latB;
+attribute float thick;
+varying vec4 vLatA;
+varying vec4 vLatB;
+varying float vThick;
+varying vec3 vWPos;
+varying vec3 vWNrm;`)
+      .replace("#include <begin_vertex>", `#include <begin_vertex>
+vLatA = latA; vLatB = latB; vThick = thick;
+vWPos = (modelMatrix * vec4(position, 1.0)).xyz;
+vWNrm = normalize(mat3(modelMatrix) * normal);`);
+    s.fragmentShader = s.fragmentShader
+      .replace("#include <common>", `#include <common>
+uniform vec3 uLamp;
+uniform float uThickMax;
+varying vec4 vLatA;
+varying vec4 vLatB;
+varying float vThick;
+varying vec3 vWPos;
+varying vec3 vWNrm;
+${SH_GLSL}
+${neural ? FEATURES_GLSL + mlpGlsl(weights) : CLASSIC_GLSL}`)
+      .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
+{
+  vec3 n = normalize(vWNrm);
+  vec3 envSSS, lampSSS;
+${neural
+    ? `  float x[19];
+  features(vLatA, vLatB, n, vWPos, cameraPosition, uLamp, x);
+  neuralSSS(x, envSSS, lampSSS);`
+    : `  classicSSS(n, vWPos, cameraPosition, uLamp, vThick * uThickMax, envSSS, lampSSS);`}
+  totalEmissiveRadiance += envSSS + lampSSS;
+}`);
+  };
+  m.customProgramCacheKey = () => `jade-${mode}-${weights?.width ?? "classic"}`;
+  return m;
 }
 
-// Dark table: Lambert from the flame point light, shadowed by the candle (chord > 0).
-// Known gap vs Mitsuba: light transmitted through the wax onto the table is not modelled.
-export function makeTableMaterial(cfg, shared) {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      ...shared,
-      uAlbedo: { value: new THREE.Vector3(...cfg.table.albedo) },
-      uR: { value: cfg.candle.radius },
-      uH: { value: cfg.candle.height },
-    },
-    vertexShader: VERT,
-    fragmentShader: /* glsl */ `
-precision highp float;
-uniform vec3 uFlameBase, uFlameOffset, uFlameI, uAlbedo;
-uniform float uFlameIntensity, uR, uH;
-varying vec3 vPos;
-varying vec3 vNrm;
-${CHORD_GLSL}
-void main() {
-  vec3 flame = uFlameBase + uFlameOffset;
-  vec3 toL = flame - vPos;
-  float d2 = dot(toL, toL);
-  float vis = chordToFlame(vPos, flame, uR, uH) > 0.0 ? 0.0 : 1.0;
-  vec3 c = uAlbedo / 3.14159265 * uFlameI * uFlameIntensity * max(toL.y, 0.0) * inversesqrt(d2) / d2 * vis;
-  gl_FragColor = vec4(c, 1.0);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
-}`,
-  });
+// Per-vertex data for the jade: 8 latents as two normalized uint8 vec4 attributes + thickness.
+export function setJadeAttributes(geometry, latents, thickness) {
+  const n = geometry.attributes.position.count;
+  const a = new Uint8Array(n * 4), b = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    a.set(latents.subarray(i * 8, i * 8 + 4), i * 4);
+    b.set(latents.subarray(i * 8 + 4, i * 8 + 8), i * 4);
+  }
+  geometry.setAttribute("latA", new THREE.BufferAttribute(a, 4, true));
+  geometry.setAttribute("latB", new THREE.BufferAttribute(b, 4, true));
+  if (thickness) geometry.setAttribute("thick", new THREE.BufferAttribute(thickness, 1, true));
+}
+
+export function makeGround(cfg, envMap) {
+  const s = cfg.ground.size;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(s, s).rotateX(-Math.PI / 2),
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setRGB(...cfg.ground.albedo, THREE.LinearSRGBColorSpace),
+      roughness: cfg.ground.roughness, metalness: 0, envMap, envMapIntensity: cfg.env.scale,
+    }),
+  );
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Lamp = sphere area light of radiance Le, radius r  ==  point intensity Le * pi * r^2 (per channel).
+// A SpotLight aimed at the dragon carries it (one shadow-map pass, for the ground only).
+export function makeLamp(cfg) {
+  const r = cfg.lamp.sphere_radius;
+  const I = cfg.lamp.radiance.map((c) => c * Math.PI * r * r);
+  const peak = Math.max(...I);
+  const light = new THREE.SpotLight(new THREE.Color().setRGB(...I.map((c) => c / peak), THREE.LinearSRGBColorSpace),
+    peak, 0, Math.PI / 2.4, 0.4, 2);
+  light.castShadow = true;
+  light.shadow.mapSize.set(1024, 1024);
+  light.shadow.bias = -0.0005;
+  light.target.position.set(...cfg.lamp.center);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(...cfg.lamp.radiance, THREE.LinearSRGBColorSpace) }));
+  return { light, bulb };
 }
