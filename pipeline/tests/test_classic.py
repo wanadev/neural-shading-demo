@@ -2,30 +2,39 @@ import numpy as np
 
 from pipeline.classic import classic_sss, fit_classic
 
-P = dict(w=0.5, k=50.0, a=0.0, b=1.0, tint=[1.0, 0.6, 0.3])
+SH = np.zeros((9, 3), np.float32); SH[0] = 3.0; SH[1] = 1.0  # bright ambient, a bit more from above
+TRUE = dict(w=0.3, k=40.0, p=4.0, dist=0.2, tint_d=[0.01, 0.05, 0.02], tint_t=[0.02, 0.08, 0.04],
+            tint_e=[0.02, 0.06, 0.03], tint_eb=[0.01, 0.04, 0.02])
 
 
-def test_classic_decays_with_chord():
-    flame = np.array([0, 0.11, 0])
-    nrm = np.array([[1.0, 0, 0], [1.0, 0, 0]])
-    pos = np.array([[0.035, 0.09, 0], [0.035, 0.03, 0]])  # lower point: longer chord
-    cam = np.array([0.3, 0.06, 0])
-    s = classic_sss(pos, nrm, cam, flame, P)
-    assert (s >= 0).all()
-    assert (s[1] < s[0]).all()
+def _inputs(n, rng):
+    nrm = rng.normal(size=(n, 3)); nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+    pos = rng.normal(0, 0.03, (n, 3)) + [0, 0.07, 0]
+    cam = np.tile([0.4, 0.1, 0.1], (n, 1)); lamp = rng.normal(size=(n, 3))
+    lamp = lamp / np.linalg.norm(lamp, axis=1, keepdims=True) * 0.25 + [0, 0.07, 0]
+    return nrm, pos, cam, lamp
 
 
-def test_fit_recovers_params(tmp_path):
-    rng = np.random.default_rng(0)
-    n = 3000
-    th = rng.uniform(0, 2 * np.pi, n); y = rng.uniform(0.01, 0.1, n)
-    pos = np.stack([0.035 * np.cos(th), y, 0.035 * np.sin(th)], 1)
-    nrm = np.stack([np.cos(th), np.zeros(n), np.sin(th)], 1)
-    off = rng.uniform(-0.003, 0.003, (n, 3)); cam = np.tile([0.3, 0.06, 0], (n, 1))
-    flame = np.array([0, 0.11, 0]) + off
-    true = dict(w=0.3, k=40.0, a=0.2, b=1.5, tint=[1.0, 0.5, 0.2])
-    Y = np.stack([classic_sss(pos[i:i + 1], nrm[i:i + 1], cam[i], flame[i], true)[0] for i in range(n)])
-    p = tmp_path / "d.npz"
-    np.savez(p, pos=pos, nrm=nrm, cam=cam, offset=off, Y=Y, view_id=np.arange(n) % 30)
-    params, err = fit_classic(p, steps=1500)
+def test_classic_positive_and_lamp_term_decays_with_thickness():
+    nrm, pos, cam, lamp = _inputs(200, np.random.default_rng(0))
+    p = dict(TRUE, tint_d=[0, 0, 0])
+    thin = classic_sss(nrm, pos, cam, lamp, np.full(200, 0.002), SH, p)
+    thick = classic_sss(nrm, pos, cam, lamp, np.full(200, 0.04), SH, p)
+    assert (thin >= 0).all() and thin.shape == (200, 6)
+    assert (thick[:, 3:] <= thin[:, 3:] + 1e-12).all() and thick[:, 3:].sum() < thin[:, 3:].sum()
+
+
+def test_fit_recovers_synthetic_params(tmp_path):
+    rng = np.random.default_rng(1)
+    n, nv = 4000, 60
+    F = rng.integers(0, nv, (100, 3)); vert_th = rng.uniform(0.001, 0.05, nv)
+    tri = rng.integers(0, 100, n); bary = rng.dirichlet([2, 2, 2], n)
+    th = (bary * vert_th[F[tri]]).sum(1)
+    nrm, pos, cam, lamp = _inputs(n, rng)
+    Y = classic_sss(nrm, pos, cam, lamp, th, SH, TRUE)
+    f = tmp_path / "d.npz"
+    np.savez(f, tri=tri, bary=bary, nrm=nrm, pos=pos, cam=cam, lamp=lamp, Y_env=Y[:, :3], Y_lamp=Y[:, 3:],
+             view_id=np.arange(n) % 30)
+    params, err = fit_classic(f, F=F, vert_th=vert_th, sh=SH, steps=2500)
     assert err < 0.05
+    assert set(params) == set(TRUE)
