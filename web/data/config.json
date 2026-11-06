@@ -5,11 +5,11 @@
  "jade": {
   "ior": 1.61,
   "roughness": 0.08,
-  "sigma_t": 600.0,
+  "sigma_t": 180.0,
   "albedo": [
-   0.9,
-   0.985,
-   0.93
+   0.35,
+   0.92,
+   0.55
   ]
  },
  "lamp": {
@@ -21,9 +21,9 @@
   "radius": 0.25,
   "sphere_radius": 0.008,
   "radiance": [
-   3000.0,
-   2700.0,
-   2300.0
+   6000.0,
+   5400.0,
+   4400.0
   ],
   "elevation_deg": [
    -10.0,
@@ -32,7 +32,7 @@
  },
  "env": {
   "name": "anniversary_lounge",
-  "scale": 0.4
+  "scale": 0.25
  },
  "ground": {
   "size": 4.0,
@@ -59,7 +59,7 @@
    60.0
   ]
  },
- "exposure": 1.0,
+ "exposure": 0.6,
  "ref_poses": [
   {
    "az_deg": 30,
