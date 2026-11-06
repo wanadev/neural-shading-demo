@@ -1,36 +1,36 @@
-# Résultats
+# Résultats — dragon de jade
 
-Erreur RMSE relative (RMSE / moyenne de la référence) sur les pixels de cire, contre les vues
-de référence path tracées (1024², 2048 spp), flamme au repos.
+Erreur RMSE relative (RMSE / moyenne de la référence) du SSS sur les pixels du dragon, contre les
+poses de référence path tracées (caméra + lampe). Poses 1 et 3 : contre-jour.
 
-- **SSS, blocs 8×8** : pixels moyennés par blocs avant comparaison. Mesure principale : le grain
-  du path tracing dans la partie sombre domine sinon l'erreur pixel à pixel.
-- **SSS, pixel** et **image** (SSS + reflet) : pixel à pixel, bruit de la référence inclus.
+- **SSS, blocs 8×8** : pixels moyennés par blocs avant comparaison (mesure principale : enlève le grain
+  du path tracing).
+- **SSS, pixel** et **image** (SSS + vernis) : pixel à pixel, bruit de la référence inclus.
 
-| vue | méthode | SSS, blocs 8×8 | SSS, pixel | image, pixel |
+| pose | méthode | SSS, blocs 8×8 | SSS, pixel | image, pixel |
 |---|---|---|---|---|
-| 0 | classique | 1.075 | 1.272 | 1.107 |
-| 0 | neural 8 | 0.308 | 0.611 | 0.531 |
-| 0 | neural 16 | 0.317 | 0.615 | 0.535 |
-| 0 | neural 32 | 0.263 | 0.588 | 0.511 |
-| 1 | classique | 1.380 | 1.774 | 1.361 |
-| 1 | neural 8 | 0.259 | 1.119 | 0.859 |
-| 1 | neural 16 | 0.238 | 1.114 | 0.855 |
-| 1 | neural 32 | 0.215 | 1.109 | 0.851 |
-| 2 | classique | 0.971 | 2.665 | 2.647 |
-| 2 | neural 8 | 0.506 | 2.531 | 2.515 |
-| 2 | neural 16 | 0.507 | 2.542 | 2.525 |
-| 2 | neural 32 | 0.369 | 2.510 | 2.493 |
-| 3 | classique | 1.152 | 1.212 | 0.869 |
-| 3 | neural 8 | 0.142 | 0.372 | 0.267 |
-| 3 | neural 16 | 0.190 | 0.392 | 0.281 |
-| 3 | neural 32 | 0.191 | 0.392 | 0.281 |
+| 0 | classique | 0.353 | 0.369 | 0.329 |
+| 0 | neural 16 | 0.214 | 0.252 | 0.225 |
+| 0 | neural 32 | 0.220 | 0.249 | 0.222 |
+| 0 | neural 64 | 0.170 | 0.198 | 0.176 |
+| 1 (contre-jour) | classique | 1.507 | 1.581 | 1.283 |
+| 1 (contre-jour) | neural 16 | 0.502 | 0.677 | 0.549 |
+| 1 (contre-jour) | neural 32 | 0.619 | 1.117 | 0.907 |
+| 1 (contre-jour) | neural 64 | 0.757 | 0.984 | 0.799 |
+| 2 | classique | 0.398 | 0.414 | 0.362 |
+| 2 | neural 16 | 0.199 | 0.232 | 0.203 |
+| 2 | neural 32 | 0.163 | 0.196 | 0.172 |
+| 2 | neural 64 | 0.152 | 0.186 | 0.163 |
+| 3 (contre-jour) | classique | 1.880 | 1.955 | 1.587 |
+| 3 (contre-jour) | neural 16 | 0.661 | 0.770 | 0.625 |
+| 3 (contre-jour) | neural 32 | 0.513 | 0.671 | 0.545 |
+| 3 (contre-jour) | neural 64 | 0.597 | 0.851 | 0.691 |
 
-Moyenne sur les vues :
+Moyennes :
 
-| méthode | SSS, blocs 8×8 | SSS, pixel | image, pixel |
+| méthode | SSS blocs, toutes poses | SSS blocs, contre-jour | image pixel |
 |---|---|---|---|
-| classique | 1.145 | 1.730 | 1.496 |
-| neural 8 | 0.304 | 1.158 | 1.043 |
-| neural 16 | 0.313 | 1.166 | 1.049 |
-| neural 32 | 0.260 | 1.150 | 1.034 |
+| classique | 1.035 | 1.694 | 0.890 |
+| neural 16 | 0.394 | 0.582 | 0.401 |
+| neural 32 | 0.379 | 0.566 | 0.461 |
+| neural 64 | 0.419 | 0.677 | 0.457 |
