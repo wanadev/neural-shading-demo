@@ -20,8 +20,9 @@ import { makeGround, makeJadeMaterial, makeLamp, setJadeAttributes } from "./mat
 import { backlight, clampLamp, lampPosition } from "./lamp.js";
 import { leaveRef, nearestRefView, orbitLimits, viewDir, withPose } from "./refs.js";
 import { effectiveWidth, parseDeepLink, pickPipeline, pipelineSettings, sideMode } from "./policy.js";
-import { formatHud } from "./hud.js";
-import { bench, benchFrame, gpuTimer } from "./bench.js";
+import { costRows } from "./hud.js";
+import { bench, benchFrame } from "./bench.js";
+import Stats from "three/addons/libs/stats.module.js";
 
 const $ = (id) => document.getElementById(id);
 const json = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p}: ${r.status}`); return r.json(); });
@@ -136,14 +137,16 @@ async function main() {
   };
 
   for (const side of ["left", "right"]) {
-    const sel = $(side);
-    sel.innerHTML = Object.entries(LABELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
-    sel.value = state.sides[side];
-    sel.onchange = () => setSide(side, sel.value);
+    $(side).innerHTML = Object.entries(LABELS).map(([k, v]) => `<button data-mode="${k}">${v}</button>`).join("");
+    $(side).onclick = (e) => { if (e.target.dataset.mode) setSide(side, e.target.dataset.mode); };
   }
+  const markSides = () => {
+    for (const side of ["left", "right"]) $(side).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.mode === state.sides[side]));
+  };
+  markSides();
   function setSide(side, mode) {
     state.sides[side] = mode;
-    $(side).value = mode;
+    markSides();
     if (mode === "ref") {
       const dir = camera.position.clone().sub(target).normalize().toArray();
       const i = nearestRefView(dir, cfg.ref_poses), pose = cfg.ref_poses[i];
@@ -206,14 +209,17 @@ async function main() {
     if (!dragging) return;
     const r = $("stage").getBoundingClientRect();
     state.split = THREE.MathUtils.clamp((e.clientX - r.left) / r.width, 0, 1);
-    handle.style.left = `${state.split * 100}%`;
+    placeSplit();
   });
   handle.addEventListener("pointerup", () => { dragging = false; });
   handle.addEventListener("pointercancel", () => { dragging = false; });
-  handle.style.left = `${state.split * 100}%`;
+  function placeSplit() {
+    handle.style.left = `${state.split * 100}%`;
+    $("stage").style.setProperty("--split", `${state.split * 100}%`);
+  }
+  placeSplit();
 
   // --- rendering --------------------------------------------------------------------------------
-  const timers = { left: gpuTimer(gl), right: gpuTimer(gl) };
   const shownMode = (side) => sideMode(state.sides[side], state.refIdx !== null && refTex[state.refIdx] instanceof THREE.Texture);
   const pr = () => renderer.getPixelRatio();
 
@@ -229,7 +235,6 @@ async function main() {
     }
     renderer.clear();
     const mode = shownMode(side);
-    timers[side]?.begin();
     if (mode === "ref") {
       refMat.map = refTex[state.refIdx];
       refMat.needsUpdate = true;
@@ -239,7 +244,6 @@ async function main() {
       dragon.material = mode === "classic" ? mats.classic : mats[`n${state.width}`];
       renderer.render(scene, camera);
     }
-    timers[side]?.end();
   }
   function renderCurtain(target) {
     const xs = Math.round(state.split * size);
@@ -265,8 +269,14 @@ async function main() {
   }
   const drawFrame = () => (composer ? composer.render() : renderCurtain(null));
 
+  const desktop = matchMedia("(min-width: 900px)");
+  if (desktop.matches) $("more").open = true;
+  const stats = new Stats();
+  stats.dom.classList.add("stats");
+  $("stage").append(stats.dom);
   function resize() {
-    size = Math.max(240, Math.floor(Math.min(innerWidth, innerHeight - $("controls").offsetHeight)));
+    // square canvas: the path-traced references are square renders with the same vertical FOV
+    size = Math.max(240, Math.floor(desktop.matches ? Math.min($("view").clientWidth, innerHeight) : Math.min(innerWidth, innerHeight * 0.62)));
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(size, size);
     composer?.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -285,11 +295,8 @@ async function main() {
     return mode === "neural" ? `Neural ${state.width}` : LABELS[mode];
   };
 
-  let last = performance.now(), frameMs = NaN;
   renderer.setAnimationLoop((now) => {
-    if (benching) { last = now; return; }
-    frameMs = Number.isFinite(frameMs) ? 0.9 * frameMs + 0.1 * (now - last) : now - last;
-    last = now;
+    if (benching) return;
     if (tween) {
       const k = Math.min((now - tween.t0) / 400, 1), e = k * k * (3 - 2 * k);
       const dir = tween.from.clone().normalize().lerp(tween.to.clone().normalize(), e).normalize();
@@ -298,16 +305,23 @@ async function main() {
       if (k === 1) tween = null;
     }
     drawFrame();
-    $("hud").textContent = formatHud({
-      leftLabel: label("left"), leftMs: timers.left?.poll() ?? null,
-      rightLabel: label("right"), rightMs: timers.right?.poll() ?? null,
-      frameMs, device: pipeline === "ldr" ? `${device} · sans halo` : device,
-    });
+    stats.update();
+    $("tagL").textContent = label("left");
+    $("tagR").textContent = label("right");
   });
+
+  const costLabels = ["Classique", ...cfg.widths.map((w) => `Neural ${w}`)];
+  const renderCost = (results) => {
+    $("cost").innerHTML = costRows(results, costLabels).map((r) =>
+      `<span class="name">${r.label}</span><div class="bar"><i class="${r.over ? "over" : ""}" style="width:${r.pct}%"></i></div>` +
+      `<span class="val">${r.value}</span>${r.detail ? `<span class="detail">${r.detail}</span>` : ""}`).join("");
+  };
+  renderCost(null);
+  if (pipeline === "ldr") $("device").textContent = "Ce GPU n'a pas de rendu flottant : affichage sans halo.";
 
   // --- benchmark (fixed pose: reference pose 0, camera and lamp) --------------------------------
   $("measure").onclick = async () => {
-    const btn = $("measure"), out = $("bench");
+    const btn = $("measure"), out = $("device");
     btn.disabled = true;
     benching = true;
     const saved = { sides: { ...state.sides }, lamp: { ...state.lamp }, width: state.width };
@@ -324,7 +338,7 @@ async function main() {
           const shade = await bench(renderer, () => { renderer.clear(); renderer.render(scene, camera); });
           state.sides = { left: mode, right: mode };
           const frame = await benchFrame(renderer, drawFrame);
-          rows.push({ technique: name, "shading ms (1024²)": +shade.toFixed(3), "image complète ms": +frame.toFixed(3) });
+          rows.push({ technique: name, frameMs: frame, shadeMs: shade });
         }
       });
     } finally {
@@ -335,8 +349,8 @@ async function main() {
       benching = false;
       btn.disabled = false;
     }
-    out.textContent = `${device}\n` + rows.map((r) =>
-      `${r.technique.padEnd(10)} shading ${r["shading ms (1024²)"].toFixed(2)} ms · image ${r["image complète ms"].toFixed(2)} ms`).join("\n");
+    renderCost(rows);
+    out.textContent = `Mesuré sur ${device || "cet appareil"} · image ${Math.round(size * pr())} px, halo compris${pipeline === "ldr" ? " (sans halo)" : ""}.`;
     console.table(rows);
   };
 }

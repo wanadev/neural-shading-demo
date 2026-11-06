@@ -1,26 +1,5 @@
 import * as THREE from "three";
 
-// GPU time of a block of GL calls via EXT_disjoint_timer_query_webgl2 (null when unsupported:
-// most phones and every iOS browser). Results arrive a few frames late; poll() returns the latest.
-export function gpuTimer(gl) {
-  const ext = gl.getExtension("EXT_disjoint_timer_query_webgl2");
-  if (!ext) return null;
-  const pending = [];
-  let q = null, last = null;
-  return {
-    begin() { q = gl.createQuery(); gl.beginQuery(ext.TIME_ELAPSED_EXT, q); },
-    end() { gl.endQuery(ext.TIME_ELAPSED_EXT); pending.push(q); },
-    poll() {
-      while (pending.length && gl.getQueryParameter(pending[0], gl.QUERY_RESULT_AVAILABLE)) {
-        const p = pending.shift();
-        if (!gl.getParameter(ext.GPU_DISJOINT_EXT)) last = gl.getQueryParameter(p, gl.QUERY_RESULT) / 1e6;
-        gl.deleteQuery(p);
-      }
-      return last;
-    },
-  };
-}
-
 // Wall-clock ms per render of `renderFn` into an offscreen size x size target. Rendering `reps`
 // times then reading back 1 pixel forces the GPU to finish, so vsync never caps the result.
 export async function bench(renderer, renderFn, { seconds = 3, size = 1024, reps = 20 } = {}) {
