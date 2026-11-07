@@ -1,0 +1,8 @@
+traced 150 views in 27s, 767504 px, 97.2% exit within 8 bounces
+trained in 74s, final loss 0.2075
+test view 0: classic 0.861  neural 1.116  traced 0.853
+test view 1: classic 1.181  neural 1.021  traced 0.615
+test view 2: classic 1.219  neural 1.120  traced 0.673
+mean relative error vs Mitsuba on glass pixels: classic 1.087  neural 1.086  traced 0.714
+wrote /home/clevasseur/dev/test/neural-shader/spikes/glass/out/glass_compare.png (columns: classic | neural | traced | Mitsuba)
+EXIT 0
