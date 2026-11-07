@@ -21,7 +21,8 @@ OUT = Path(__file__).parent / "out"
 R = 0.04          # AO radius, metres
 K = 16            # screen-space samples
 GT_RAYS = 128
-RES, N_TRAIN, N_TEST = 192, 120, 6
+RES, N_TRAIN, N_TEST = 192, 120, 4
+LABO = WEB_DATA / "labo" / "ao"  # images + metrics for web/labo.html
 
 # fixed sample pattern: Vogel disk, radius in [0.1, 1]
 _i = np.arange(K)
@@ -129,7 +130,7 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     t = time.time()
     Xtr, Ytr, _ = dataset(N_TRAIN, 1, RES)
-    Xte, Yte, test_imgs = dataset(N_TEST, 2, 384)  # features scale with resolution
+    Xte, Yte, test_imgs = dataset(N_TEST, 2, 512)  # features scale with resolution
     print(f"data {time.time() - t:.0f}s: train {len(Xtr)} px, test {len(Xte)} px", flush=True)
     torch.manual_seed(0)
     classic = fit(Classic(), Xtr, Ytr, 1500, 0.02)
@@ -156,6 +157,25 @@ def main():
         off += n
     mi.Bitmap(np.concatenate(rows, 0)).write(str(OUT / "ao_compare.png"))
     print("wrote", OUT / "ao_compare.png")
+    # labo export: one image per view and method + per-view error on occluded pixels
+    import json
+    LABO.mkdir(parents=True, exist_ok=True)
+    views, off = [], 0
+    for i, (hit, ys, xs, ao) in enumerate(test_imgs):
+        n = len(ys)
+        gt, err = ao[ys, xs], {}
+        occ = gt < 0.9
+        for key, vals in (("gt", gt), ("classic", pc[off:off + n]), ("neural", pn[off:off + n])):
+            img = np.ones(hit.shape, np.float32)
+            img[ys, xs] = vals
+            g8 = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+            mi.Bitmap(np.ascontiguousarray(np.repeat(g8[..., None], 3, 2))).write(str(LABO / f"view{i}-{key}.jpg"))
+            err[key] = round(float(np.abs(vals - gt)[occ].mean()), 4)
+        views.append(dict(errors=err))
+        off += n
+    (LABO.parent / "ao.json").write_text(json.dumps(dict(views=views, mae_occluded=dict(
+        classic=round(float(np.abs(pc - Yte)[occluded].mean()), 4), neural=round(float(np.abs(pn - Yte)[occluded].mean()), 4))), indent=1))
+    print("labo export ->", LABO)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,36 @@
+{
+ "views": [
+  {
+   "errors": {
+    "gt": 0.0,
+    "classic": 0.1528,
+    "neural": 0.0952
+   }
+  },
+  {
+   "errors": {
+    "gt": 0.0,
+    "classic": 0.1615,
+    "neural": 0.0827
+   }
+  },
+  {
+   "errors": {
+    "gt": 0.0,
+    "classic": 0.1469,
+    "neural": 0.0755
+   }
+  },
+  {
+   "errors": {
+    "gt": 0.0,
+    "classic": 0.176,
+    "neural": 0.0776
+   }
+  }
+ ],
+ "mae_occluded": {
+  "classic": 0.1605,
+  "neural": 0.0817
+ }
+}

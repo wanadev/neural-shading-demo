@@ -26,7 +26,8 @@ from pipeline.tonemap import aces_filmic, to_srgb8
 
 OUT = Path(__file__).parent / "out"
 IOR = 1.5
-RES_TRAIN, N_TRAIN, RES_TEST, N_TEST = 160, 150, 384, 3
+RES_TRAIN, N_TRAIN, RES_TEST, N_TEST = 160, 150, 512, 4
+LABO = WEB_DATA / "labo" / "glass"  # images + metrics for web/labo.html
 EXPOSURE = 1.0
 ENV_FILE = WEB_DATA / "env" / f"{ENV['name']}_1k.hdr"
 
@@ -189,6 +190,8 @@ def main():
     print(f"trained in {time.time() - t0:.0f}s, final loss {loss.item():.4f}", flush=True)
 
     rows, errs = [], {"classic": [], "neural": [], "traced": []}
+    LABO.mkdir(parents=True, exist_ok=True)
+    save = lambda img, key, i: mi.Bitmap(np.ascontiguousarray(to_srgb8(aces_filmic(img, EXPOSURE)))).write(str(LABO / f"view{i}-{key}.jpg"))
     rng = np.random.default_rng(11)
     for i in range(N_TEST):
         view = random_view(rng)
@@ -214,12 +217,19 @@ def main():
             img[hit] = shade[name]
             errs[name].append(np.abs(img[hit] - ref[hit]).mean() / ref[hit].mean())
             tiles.append(to_srgb8(aces_filmic(img, EXPOSURE)))
+            save(img, name, i)
         tiles.append(to_srgb8(aces_filmic(ref, EXPOSURE)))
+        save(ref, "ref", i)
         rows.append(np.concatenate(tiles, 1))
         print(f"test view {i}: " + "  ".join(f"{k} {v[-1]:.3f}" for k, v in errs.items()), flush=True)
     print("mean relative error vs Mitsuba on glass pixels: " + "  ".join(f"{k} {np.mean(v):.3f}" for k, v in errs.items()))
     mi.Bitmap(np.concatenate(rows, 0)).write(str(OUT / "glass_compare.png"))
     print("wrote", OUT / "glass_compare.png", "(columns: classic | neural | traced | Mitsuba)")
+    import json
+    (LABO.parent / "glass.json").write_text(json.dumps(dict(
+        views=[dict(errors={k: round(float(v[i]), 4) for k, v in errs.items()}) for i in range(N_TEST)],
+        mean={k: round(float(np.mean(v)), 4) for k, v in errs.items()}), indent=1))
+    print("labo export ->", LABO)
 
 
 if __name__ == "__main__":
