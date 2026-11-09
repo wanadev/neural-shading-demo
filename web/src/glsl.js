@@ -5,7 +5,8 @@ export const FEATURES_GLSL = /* glsl */ `
 uniform float uLatLo[8];
 uniform float uLatHi[8];
 void features(vec4 latA, vec4 latB, vec3 nrm, vec3 pos, vec3 cam, vec3 lamp, out float x[19]) {
-  float l[8] = float[8](latA.x, latA.y, latA.z, latA.w, latB.x, latB.y, latB.z, latB.w);
+  float l[8];  // no float[8](...) constructor: Mali (Pixel 6a) rejects it, "no default precision defined"
+  l[0] = latA.x; l[1] = latA.y; l[2] = latA.z; l[3] = latA.w; l[4] = latB.x; l[5] = latB.y; l[6] = latB.z; l[7] = latB.w;
   for (int i = 0; i < 8; i++) x[i] = uLatLo[i] + (uLatHi[i] - uLatLo[i]) * l[i];
   vec3 view = normalize(cam - pos);
   vec3 toL = lamp - pos;
