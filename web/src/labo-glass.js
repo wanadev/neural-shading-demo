@@ -11,6 +11,7 @@ import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import Stats from "three/addons/libs/stats.module.js";
 import { BVHShaderGLSL, FloatVertexAttributeTexture, MeshBVH, MeshBVHUniformStruct } from "three-mesh-bvh";
 import { packWeights } from "./mlp.js";
+import { benchFrame } from "./bench.js";
 import { orbitLimits, viewDir } from "./refs.js";
 
 const IOR = 1.5, ENV_BOOST = 4;  // same as the spike
@@ -234,8 +235,17 @@ export async function createGlass({ canvas, views, cfg }) {
     return out;
   }
 
+  // ms per full frame with both sides of the curtain on the same method (bench.js: readback forces the GPU to finish)
+  async function benchMethods(methods, opts) {
+    running = false;
+    const saved = { ...state }, out = {};
+    for (const m of methods) { Object.assign(state, { left: m, right: m }); out[m] = await benchFrame(renderer, render, opts); }
+    Object.assign(state, saved); running = true;
+    return out;
+  }
+
   return {
-    stats, state, resize, setPose, check,
+    stats, state, resize, setPose, check, benchMethods,
     pause() { running = false; }, resume() { running = true; },
     onMove(fn) { onMove = fn; },
     nearestPose() {

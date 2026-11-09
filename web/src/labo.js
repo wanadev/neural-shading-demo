@@ -18,7 +18,7 @@ const EFFECTS = {
     reference: "ref", precomputed: ["ref"], fallback: "traced", left: "classic", right: "traced", view: 3,
     errNote: "Erreur moyenne sur le verre, par rapport au rendu Mitsuba, à cette vue de référence. Plus bas, c'est mieux.",
     note: "Réfraction, réseau et trajet exact tournent en temps réel. Le trajet exact lance de vrais rayons à travers le mesh dans le shader (three-mesh-bvh). Mitsuba est précalculé aux 4 vues de référence : le choisir cale la caméra dessus.",
-    story: "Le réseau devait apprendre où la lumière ressort du dragon en verre. Il échoue : dans le verre, deux pixels voisins peuvent ressortir dans des directions opposées, et des latents interpolés en douceur ne savent pas représenter ça. Ici, le bon outil n'est pas un réseau mais du ray tracing directement dans le shader, qui tient en temps réel.",
+    story: "Le réseau devait apprendre où la lumière ressort du dragon en verre. Il échoue : dans le verre, deux pixels voisins peuvent ressortir dans des directions opposées, et des latents interpolés en douceur ne savent pas représenter ça. Le trajet exact, lancé directement dans le shader, s'en sort bien mieux, mais il coûte cher : sur mon PC portable (GPU intégré Intel), environ 4 images par seconde en 1024 px, contre 16 pour le réseau et plus de 100 pour la réfraction simple.",
   },
 };
 

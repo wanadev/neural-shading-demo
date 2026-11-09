@@ -7,6 +7,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 import Stats from "three/addons/libs/stats.module.js";
 import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
+import { benchFrame } from "./bench.js";
 import { orbitLimits, viewDir } from "./refs.js";
 
 const TEXW = 256;
@@ -356,8 +357,17 @@ void main() {
     return Object.fromEntries(methods.map((m, k) => [m, res[k]]));
   }
 
+  // ms per full frame with both sides of the curtain on the same method (bench.js: readback forces the GPU to finish)
+  async function benchMethods(methods, opts) {
+    running = false;
+    const saved = { ...state }, out = {};
+    for (const m of methods) { Object.assign(state, { left: m, right: m }); out[m] = await benchFrame(renderer, render, opts); }
+    Object.assign(state, saved); running = true;
+    return out;
+  }
+
   return {
-    camera, controls, stats, state, resize, setPose, check, measure, setGtaoParams,
+    camera, controls, stats, state, resize, setPose, check, measure, setGtaoParams, benchMethods,
     setAoScale(v) { aoScale = v; allocate(); },
     onMove(fn) { onMove = fn; },
     pause() { running = false; }, resume() { running = true; },
