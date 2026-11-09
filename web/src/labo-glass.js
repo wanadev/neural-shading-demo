@@ -187,14 +187,14 @@ export async function createGlass({ canvas, views, cfg }) {
     renderer.setScissorTest(false);
   }
 
-  let tween = null, running = true, onMove = null;
+  let tween = null, snapping = false, running = true, onMove = null;
   function setPose(i, animate = true) {
     const to = posOf(views[i]).sub(target), from = camera.position.clone().sub(target);
-    if (!animate) { camera.position.copy(target).add(to); controls.update(); return; }
+    if (!animate) { camera.position.copy(target).add(to); snapping = true; controls.update(); snapping = false; return; }
     tween = { from, to, t0: performance.now() };
   }
   controls.addEventListener("start", () => { tween = null; });
-  controls.addEventListener("change", () => { if (!tween) onMove?.(); });
+  controls.addEventListener("change", () => { if (!tween && !snapping) onMove?.(); });  // only real user moves
   const stats = new Stats();
   stats.dom.classList.add("stats");
   renderer.setAnimationLoop((now) => {

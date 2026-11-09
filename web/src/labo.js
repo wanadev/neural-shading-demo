@@ -8,9 +8,9 @@ const EFFECTS = {
     label: "Ambient occlusion", canvas: "aoCanvas",
     methods: { gt: "Ray tracing", classic: "SSAO simple", gtao: "GTAO", neural: "Réseau" },
     reference: "gt", precomputed: ["gt"], fallback: "neural", left: "gtao", right: "neural", view: 1,
-    errNote: "Erreur moyenne dans les zones d'ombre, par rapport au ray tracing, après débruitage (comme à l'écran), à cette vue de référence. Plus bas, c'est mieux.",
+    errNote: "Erreur moyenne dans les zones d'ombre (celles du ray tracing ou de la méthode, donc les halos comptent), par rapport au ray tracing, après débruitage (comme à l'écran), à cette vue de référence. Plus bas, c'est mieux.",
     note: "SSAO simple, GTAO (three.js) et réseau tournent en temps réel. Le ray tracing est précalculé aux 4 vues de référence : le choisir cale la caméra dessus.",
-    story: "Le réseau voit exactement ce que voit un SSAO, le depth buffer et les normales autour du pixel, et apprend une AO calculée en ray tracing. Face au GTAO de three.js, réglé lui aussi au mieux sur les mêmes vues, il reste plus proche du ray tracing. Mais tous ratent une partie de l'ombre de contact sous le dragon : en screen space, on ne voit pas ce qui est caché.",
+    story: "Le réseau voit exactement ce que voit un SSAO, le depth buffer et les normales autour du pixel, et apprend une AO calculée en ray tracing. Face au GTAO de three.js, réglé lui aussi au mieux sur les mêmes vues, il reste plus proche du ray tracing, surtout parce que le GTAO assombrit autour des objets là où il ne devrait pas (les halos). Mais tous ratent une partie de l'ombre de contact sous le dragon : en screen space, on ne voit pas ce qui est caché.",
   },
   glass: {
     label: "Verre", canvas: "glassCanvas",
@@ -126,7 +126,7 @@ try {
   [aoData, glass, net, cfg, gtaoParams, glassViews] = await Promise.all([
     json("data/labo/ao.json"), json("data/labo/glass.json"), json("data/labo/ao_net.json"), json("data/config.json"),
     json("data/labo/gtao.json").catch(() => null), json("data/labo/glass_views.json")]);
-  if (gtaoParams) aoData.views.forEach((v, i) => { v.errors.gtao = gtaoParams.errors[i]; });
+  if (gtaoParams) aoData.views.forEach((v, i) => { for (const [m, e] of Object.entries(gtaoParams.errors)) v.errors[m] = e[i]; });  // measured in the page, same metric for all
   Object.assign(data, { ao: aoData, glass });
 
   const q = new URLSearchParams(location.search);  // deep links: ?effect=glass&left=classic&right=traced&display=0

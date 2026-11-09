@@ -261,17 +261,17 @@ void main() {
     scene.overrideMaterial = null;
   }
 
-  let tween = null;
+  let tween = null, snapping = false;
   function setPose(i, animate = true) {
     const to = posOf(net.views[i]).sub(target), from = camera.position.clone().sub(target);
-    if (!animate) { camera.position.copy(target).add(to); controls.update(); return; }
+    if (!animate) { camera.position.copy(target).add(to); snapping = true; controls.update(); snapping = false; return; }
     tween = { from, to, t0: performance.now() };
   }
   const stats = new Stats();
   stats.dom.classList.add("stats");
   let running = true, onMove = null;
   controls.addEventListener("start", () => { tween = null; });
-  controls.addEventListener("change", () => { if (!tween) onMove?.(); });
+  controls.addEventListener("change", () => { if (!tween && !snapping) onMove?.(); });  // only real user moves
   renderer.setAnimationLoop((now) => {
     if (!running) return;
     if (tween) {
@@ -340,14 +340,14 @@ void main() {
           renderer.setRenderTarget(rtBlurA); renderer.render(quadScene, ortho); renderer.setRenderTarget(null);
           rt = rtBlurA;
         }
-        const float = false;
         const px = new Uint8Array(512 * 512 * 4);
         renderer.readRenderTargetPixels(rt, 0, 0, 512, 512, px);
         let sum = 0, n = 0;
         for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
+          // pixels dark in the reference OR in the method: a halo where the ray tracing is bright counts too
           const g = gt[(y * 512 + x) * 4] / 255;
-          if (g >= 0.9) continue;
-          const a = px[((511 - y) * 512 + x) * 4] / (float ? 1 : 255);  // GL rows bottom-up
+          const a = px[((511 - y) * 512 + x) * 4] / 255;  // GL rows bottom-up
+          if (g >= 0.9 && a >= 0.9) continue;
           sum += Math.abs(a - g); n++;
         }
         res[m].push(sum / Math.max(n, 1));
