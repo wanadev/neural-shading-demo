@@ -104,12 +104,12 @@ async function main() {
   const loadRef = (i) => (refTex[i] ??= new EXRLoader().loadAsync(`data/refs/view${i}.exr`).then((t) => { refTex[i] = t; return t; }));
 
   // --- state ------------------------------------------------------------------------------------
-  const state = { split: 0.5, sides: { left: "classic", right: "neural" }, width: 32, wantWidth: 32,
+  const state = { split: 0.5, sides: { left: "classic", right: "neural" }, width: 16, wantWidth: 16,  // 16: same quality as 32 at a quarter of the cost
                   lamp: { az_deg: cfg.ref_poses[0].lamp_az_deg, el_deg: cfg.ref_poses[0].lamp_el_deg },
                   refIdx: null, move: "camera" };
   let size = 0, tween = null, benching = false;
-  await loadWidth(32);
-  setJadeAttributes(geometry, latents[32], thickness);
+  await loadWidth(16);
+  setJadeAttributes(geometry, latents[16], thickness);
 
   function setLamp(l) {
     state.lamp = clampLamp(l, cfg);
