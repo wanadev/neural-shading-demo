@@ -98,7 +98,7 @@ def dataset(n_views, seed, res):
         ao = gt_ao(sc, pos, nrm, hit, rng)
         x, ys, xs = ss_features(pos, nrm, hit, eye, fwd, res)
         X.append(x); Y.append(ao[ys, xs])
-        imgs.append((hit, ys, xs, ao))
+        imgs.append((hit, ys, xs, ao, v))
     return np.concatenate(X), np.concatenate(Y), imgs
 
 
@@ -146,7 +146,7 @@ def main():
     print(f"classic params s={classic.s.item():.3f} bias={classic.bias.item():.3f}")
     # comparison sheet: rows = test views, columns = ground truth | classic | neural
     rows, off = [], 0
-    for hit, ys, xs, ao in test_imgs[:3]:
+    for hit, ys, xs, ao, _ in test_imgs[:3]:
         n = len(ys)
         tiles = []
         for vals in (ao[ys, xs], pc[off:off + n], pn[off:off + n]):
@@ -161,7 +161,7 @@ def main():
     import json
     LABO.mkdir(parents=True, exist_ok=True)
     views, off = [], 0
-    for i, (hit, ys, xs, ao) in enumerate(test_imgs):
+    for i, (hit, ys, xs, ao, _) in enumerate(test_imgs):
         n = len(ys)
         gt, err = ao[ys, xs], {}
         occ = gt < 0.9
@@ -175,6 +175,13 @@ def main():
         off += n
     (LABO.parent / "ao.json").write_text(json.dumps(dict(views=views, mae_occluded=dict(
         classic=round(float(np.abs(pc - Yte)[occluded].mean()), 4), neural=round(float(np.abs(pn - Yte)[occluded].mean()), 4))), indent=1))
+    # real-time export: the trained network + fitted classic SSAO + the reference camera poses
+    lin = [m for m in mlp if isinstance(m, torch.nn.Linear)]
+    (LABO.parent / "ao_net.json").write_text(json.dumps(dict(
+        K=K, R=R, pattern=PATTERN.tolist(),
+        layers=[dict(W=l.weight.detach().numpy().tolist(), b=l.bias.detach().numpy().tolist()) for l in lin],
+        classic=dict(s=classic.s.item(), bias=classic.bias.item()),
+        views=[dict(az_deg=float(v["az_deg"]), el_deg=float(v["el_deg"]), radius=float(v["radius"])) for *_, v in test_imgs])))
     print("labo export ->", LABO)
 
 
