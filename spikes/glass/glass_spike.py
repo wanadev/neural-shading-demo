@@ -193,6 +193,7 @@ def main():
     q, lo, hi = quantize(model.latents)
     model.latents.data = torch.from_numpy(lo + (hi - lo) * q.astype(np.float32) / 255)
     import json
+    LABO.mkdir(parents=True, exist_ok=True)
     (LABO.parent / "glass_latents.bin").write_bytes(q.tobytes())
     (LABO.parent / "glass_net.json").write_text(json.dumps(dict(
         latent_lo=lo.tolist(), latent_hi=hi.tolist(),

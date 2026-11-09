@@ -1,6 +1,6 @@
-// Labo page: two live engines (labo-ao.js, labo-glass.js). Ground truths, the Mitsuba reference and
-// the failed glass network are precomputed images at 4 reference poses: picking one snaps the camera
-// there, and any camera move falls back to a live method.
+// Labo page: two live engines (labo-ao.js, labo-glass.js). The ray-traced AO and the Mitsuba glass
+// reference are precomputed images at 4 reference poses: picking one snaps the camera there, and any
+// camera move falls back to a live method.
 const $ = (id) => document.getElementById(id);
 
 const EFFECTS = {
@@ -33,8 +33,11 @@ const seg = (el, items, current, onPick) => {
 const fmt = (v) => v.toFixed(3).replace(".", ",");
 const engine = () => engines[state.effect];
 
-async function ensureEngine(effect) {
-  if (engines[effect]) return engines[effect];
+const creating = {};
+function ensureEngine(effect) {
+  return engines[effect] ? Promise.resolve(engines[effect]) : (creating[effect] ??= createEngine(effect));
+}
+async function createEngine(effect) {
   const canvas = $(EFFECTS[effect].canvas);
   const e = effect === "ao"
     ? await (await import("./labo-ao.js")).createAo({ canvas, net, cfg, gtaoParams })
@@ -125,8 +128,8 @@ try {
   let aoData, glass;
   [aoData, glass, net, cfg, gtaoParams, glassViews] = await Promise.all([
     json("data/labo/ao.json"), json("data/labo/glass.json"), json("data/labo/ao_net.json"), json("data/config.json"),
-    json("data/labo/gtao.json").catch(() => null), json("data/labo/glass_views.json")]);
-  if (gtaoParams) aoData.views.forEach((v, i) => { for (const [m, e] of Object.entries(gtaoParams.errors)) v.errors[m] = e[i]; });  // measured in the page, same metric for all
+    json("data/labo/gtao.json"), json("data/labo/glass_views.json")]);
+  aoData.views.forEach((v, i) => { for (const [m, e] of Object.entries(gtaoParams.errors)) v.errors[m] = e[i]; });  // measured in the page, same metric for all
   Object.assign(data, { ao: aoData, glass });
 
   const q = new URLSearchParams(location.search);  // deep links: ?effect=glass&left=classic&right=traced&display=0
@@ -145,9 +148,10 @@ try {
     const tag = flag.toUpperCase();
     $("story").textContent = `${tag} en cours`;
     const res = await e.check().catch((err) => { $("story").textContent = `${tag} ERREUR ${err.message}`; throw err; });
+    e.resize($("stage").clientWidth);
+    render();  // pauses and hides the engine not on screen
     $("story").textContent = `${tag} ` + res.map((r) => `vue ${r.view}: écart moyen ${(r.mae * 100).toFixed(2)} %` +
       (r.bad !== undefined ? `, pixels > 10 % : ${(r.bad * 100).toFixed(2)} %` : "")).join(" | ");
-    e.resize($("stage").clientWidth);
   }
 } catch (e) {
   document.body.insertAdjacentHTML("afterbegin", `<div id="err">Erreur : ${e.message}</div>`);

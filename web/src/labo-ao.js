@@ -143,7 +143,7 @@ export async function createAo({ canvas, net, cfg, gtaoParams }) {
 
   // depth- and normal-aware separable blur: removes the rotation noise, keeps edges
   const blurMat = new THREE.ShaderMaterial({
-    uniforms: { tAo: { value: null }, tPos: uniforms.tPos, tNrm: uniforms.tNrm, uDir: { value: new THREE.Vector2(1, 0) }, uR: uniforms.uR },
+    uniforms: { tAo: { value: null }, tPos: uniforms.tPos, tNrm: uniforms.tNrm, uDir: { value: new THREE.Vector2(1, 0) }, uR: uniforms.uR, uSplit: { value: 0 } },
     vertexShader: "void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }",
     fragmentShader: /* glsl */ `
 precision highp float;
@@ -151,6 +151,7 @@ precision highp sampler2D;
 uniform sampler2D tAo, tPos, tNrm;
 uniform vec2 uDir;
 uniform float uR;
+uniform int uSplit;  // first AO texel of the right side: taps never cross the curtain
 void main() {
   ivec2 size = textureSize(tPos, 0), ip = ivec2(gl_FragCoord.xy);
   vec4 P = texelFetch(tPos, ip, 0);
@@ -160,7 +161,7 @@ void main() {
   for (int i = -4; i <= 4; i++) {
     ivec2 q = clamp(ip + ivec2(uDir) * i, ivec2(0), size - 1);
     vec4 Q = texelFetch(tPos, q, 0);
-    if (Q.a < 0.5) continue;
+    if (Q.a < 0.5 || (q.x < uSplit) != (ip.x < uSplit)) continue;
     vec3 m = texelFetch(tNrm, q, 0).xyz;
     float dz = length(Q.xyz - P.xyz) / (0.25 * uR);
     float w = exp(-float(i * i) / 8.0) * pow(max(dot(n, m), 0.0), 8.0) * exp(-dz * dz);
@@ -240,6 +241,7 @@ void main() {
       gtao.render(renderer, null, null);
     }
     quad.material = blurMat;
+    blurMat.uniforms.uSplit.value = xs;
     for (const [src, dst, dir] of [[rtAo, rtBlurA, [1, 0]], [rtBlurA, rtBlurB, [0, 1]]]) {
       blurMat.uniforms.tAo.value = src.texture; blurMat.uniforms.uDir.value.set(...dir);
       renderer.setRenderTarget(dst); renderer.render(quadScene, ortho);
@@ -288,7 +290,7 @@ void main() {
   // parity check against the spike's own images: full-res neural AO at each reference pose
   async function check() {
     running = false;
-    const saved = { ...state };
+    const saved = { ...state }, savedScale = aoScale;
     resize(512, 1); aoScale = 1; allocate();
     Object.assign(state, { left: "neural", right: "neural" });
     const out = [];
@@ -307,7 +309,7 @@ void main() {
       }
       out.push({ view: i + 1, mae: sum / Math.max(n, 1), bad: bad / Math.max(n, 1) });
     }
-    Object.assign(state, saved); aoScale = 0.5; running = true;
+    Object.assign(state, saved); aoScale = savedScale; allocate(); running = true;
     return out;
   }
 
@@ -353,7 +355,7 @@ void main() {
         res[m].push(sum / Math.max(n, 1));
       }
     }
-    Object.assign(state, saved); aoScale = savedScale; running = true;
+    Object.assign(state, saved); aoScale = savedScale; allocate(); running = true;
     return Object.fromEntries(methods.map((m, k) => [m, res[k]]));
   }
 

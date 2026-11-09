@@ -3,7 +3,8 @@
 //   traced  : the exact dominant path through the mesh (refraction in, up to 8 total internal
 //             reflections, refraction out), ray-cast in the fragment shader against a BVH
 //             (three-mesh-bvh). GLSL port of trace_exit() in spikes/glass/glass_spike.py.
-// The Mitsuba reference and the (failed) network are precomputed images at the reference poses.
+//   neural  : the (failed) network of the spike, latents + MLP -> exit direction, transmittance
+// The Mitsuba reference is a precomputed image at the reference poses.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
@@ -15,6 +16,7 @@ import { benchFrame } from "./bench.js";
 import { orbitLimits, viewDir } from "./refs.js";
 
 const IOR = 1.5, ENV_BOOST = 4;  // same as the spike
+const get = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p} : HTTP ${r.status}`); return r; });
 
 // The (failed) glass network of the spike: 8 latents + n + d -> 64 -> 64 -> exit direction, transmittance.
 // Plain ReLU, unlike the jade. Weights in a float texture, same packing as the jade (mlp.js).
@@ -124,8 +126,8 @@ export async function createGlass({ canvas, views, cfg }) {
   renderer.toneMappingExposure = 1.0;
   renderer.autoClear = false;
   const [geometry, envSH, netW, lat] = await Promise.all([new PLYLoader().loadAsync("data/dragon.ply"),
-    fetch("data/env_sh.json").then((r) => r.json()), fetch("data/labo/glass_net.json").then((r) => r.json()),
-    fetch("data/labo/glass_latents.bin").then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b))]);
+    get("data/env_sh.json").then((r) => r.json()), get("data/labo/glass_net.json").then((r) => r.json()),
+    get("data/labo/glass_latents.bin").then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b))]);
   const nv = geometry.attributes.position.count;
   if (lat.length !== nv * 8) throw new Error(`glass latents: ${lat.length / 8} vertices, mesh has ${nv}`);
   for (const k of [0, 1]) {
