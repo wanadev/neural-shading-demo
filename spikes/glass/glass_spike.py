@@ -226,6 +226,8 @@ def main():
     mi.Bitmap(np.concatenate(rows, 0)).write(str(OUT / "glass_compare.png"))
     print("wrote", OUT / "glass_compare.png", "(columns: classic | neural | traced | Mitsuba)")
     import json
+    rng = np.random.default_rng(11)  # the test views above, for the real-time page
+    (LABO.parent / "glass_views.json").write_text(json.dumps([{k: float(v) for k, v in random_view(rng).items()} for _ in range(N_TEST)]))
     (LABO.parent / "glass.json").write_text(json.dumps(dict(
         views=[dict(errors={k: round(float(v[i]), 4) for k, v in errs.items()}) for i in range(N_TEST)],
         mean={k: round(float(np.mean(v)), 4) for k, v in errs.items()}), indent=1))

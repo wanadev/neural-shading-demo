@@ -6,6 +6,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 import Stats from "three/addons/libs/stats.module.js";
+import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
 import { orbitLimits, viewDir } from "./refs.js";
 
 const TEXW = 256;
@@ -105,7 +106,7 @@ void main() {
   });
 }
 
-export async function createAo({ canvas, net, cfg }) {
+export async function createAo({ canvas, net, cfg, gtaoParams }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
   renderer.autoClear = false;
   const floatRT = renderer.extensions.has("EXT_color_buffer_float") ? THREE.FloatType : THREE.HalfFloatType;
@@ -189,6 +190,14 @@ void main() {
   });
   const gtTex = net.views.map((_, i) => new THREE.TextureLoader().load(`data/labo/ao/view${i}-gt.jpg`));
 
+  // state of the art in screen space: three.js GTAO with its own Poisson denoise, tuned on the
+  // same reference poses (labo/gtao.json, written by the tuning run)
+  const gtao = new GTAOPass(scene, camera, 64, 64);
+  gtao.output = GTAOPass.OUTPUT.Off;  // we only read gtao.gtaoMap
+  gtao.setSceneClipBox(new THREE.Box3().setFromObject(scene));
+  const setGtaoParams = (p) => gtao.updateGtaoMaterial({ radius: net.R, samples: 16, ...p });
+  setGtaoParams(gtaoParams?.params ?? {});
+
   let size = 0;
   function allocate() {
     const px = Math.max(64, Math.round(size * renderer.getPixelRatio() * aoScale));
@@ -198,6 +207,7 @@ void main() {
     rtBlurA = mk(THREE.UnsignedByteType, THREE.NearestFilter); rtBlurB = mk(THREE.UnsignedByteType, THREE.LinearFilter);
     uniforms.tPos.value = rtPos.texture; uniforms.tNrm.value = rtNrm.texture;
     uniforms.uFocal.value = (px / 2) / Math.tan(THREE.MathUtils.degToRad(cfg.camera.fov_y) / 2);
+    gtao.setSize(px, px);
   }
   function resize(cssSize, dpr = Math.min(devicePixelRatio, 2)) {
     size = cssSize;
@@ -217,13 +227,17 @@ void main() {
     }
     const W = rtAo.width, xs = Math.round(state.split * W);
     for (const [side, x0, w] of [["left", 0, xs], ["right", xs, W - xs]]) {
-      if (state[side] === "gt" || w <= 0) continue;
+      if (state[side] === "gt" || state[side] === "gtao" || w <= 0) continue;
       rtAo.scissor.set(x0, 0, w, W); rtAo.scissorTest = true;
       renderer.setRenderTarget(rtAo);
       quad.material = mats[state[side]];
       renderer.render(quadScene, ortho);
     }
     rtAo.scissorTest = false;
+    if (state.left === "gtao" || state.right === "gtao") {
+      scene.overrideMaterial = null;
+      gtao.render(renderer, null, null);
+    }
     quad.material = blurMat;
     for (const [src, dst, dir] of [[rtAo, rtBlurA, [1, 0]], [rtBlurA, rtBlurB, [0, 1]]]) {
       blurMat.uniforms.tAo.value = src.texture; blurMat.uniforms.uDir.value.set(...dir);
@@ -238,7 +252,7 @@ void main() {
     renderer.setScissorTest(true);
     for (const [side, x0, w] of [["left", 0, cut], ["right", cut, size - cut]]) {
       if (w <= 0) continue;
-      compMat.uniforms.tAo.value = state[side] === "gt" ? gtTex.at(state.view) : rtBlurB.texture;
+      compMat.uniforms.tAo.value = state[side] === "gt" ? gtTex.at(state.view) : state[side] === "gtao" ? gtao.gtaoMap : rtBlurB.texture;
       renderer.setScissor(x0, 0, w, size);
       renderer.render(scene, camera);
     }
@@ -296,10 +310,57 @@ void main() {
     return out;
   }
 
+  const copyMat = new THREE.ShaderMaterial({ uniforms: { t: { value: null } },
+    vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
+    fragmentShader: "precision highp float; uniform sampler2D t; varying vec2 vUv; void main() { gl_FragColor = vec4(vec3(texture2D(t, vUv).r), 1.0); }" });
+  const gtPixels = [];
+  async function gtImage(i) {
+    if (!gtPixels[i]) {
+      const bmp = await createImageBitmap(await (await fetch(`data/labo/ao/view${i}-gt.jpg`)).blob());
+      const c = new OffscreenCanvas(512, 512).getContext("2d"); c.drawImage(bmp, 0, 0);
+      gtPixels[i] = c.getImageData(0, 0, 512, 512).data;
+    }
+    return gtPixels[i];
+  }
+  async function measure(methods = ["classic", "neural", "gtao"]) {
+    running = false;
+    const saved = { ...state }, savedScale = aoScale;
+    resize(512, 1); aoScale = 1; allocate();
+    const res = methods.map(() => []);
+    for (let i = 0; i < net.views.length; i++) {
+      setPose(i, false);
+      const gt = await gtImage(i);
+      for (const [m, method] of methods.entries()) {
+        Object.assign(state, { left: method, right: method });
+        render();
+        let rt = rtBlurB;
+        if (method === "gtao") {  // half-float target: copy to 8 bits first, like the other methods
+          copyMat.uniforms.t.value = gtao.gtaoMap; quad.material = copyMat;
+          renderer.setRenderTarget(rtBlurA); renderer.render(quadScene, ortho); renderer.setRenderTarget(null);
+          rt = rtBlurA;
+        }
+        const float = false;
+        const px = new Uint8Array(512 * 512 * 4);
+        renderer.readRenderTargetPixels(rt, 0, 0, 512, 512, px);
+        let sum = 0, n = 0;
+        for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
+          const g = gt[(y * 512 + x) * 4] / 255;
+          if (g >= 0.9) continue;
+          const a = px[((511 - y) * 512 + x) * 4] / (float ? 1 : 255);  // GL rows bottom-up
+          sum += Math.abs(a - g); n++;
+        }
+        res[m].push(sum / Math.max(n, 1));
+      }
+    }
+    Object.assign(state, saved); aoScale = savedScale; running = true;
+    return Object.fromEntries(methods.map((m, k) => [m, res[k]]));
+  }
+
   return {
-    camera, controls, stats, state, resize, setPose, check,
+    camera, controls, stats, state, resize, setPose, check, measure, setGtaoParams,
     setAoScale(v) { aoScale = v; allocate(); },
     onMove(fn) { onMove = fn; },
+    pause() { running = false; }, resume() { running = true; },
     nearestPose() {
       const d = camera.position.clone().sub(target).normalize();
       let best = 0, bd = -2;

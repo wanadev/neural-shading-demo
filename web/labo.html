@@ -4,22 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Labo · neural shading</title>
-<meta name="description" content="Deux tests de neural shading : ambient occlusion et verre. Images précalculées, comparées à la ground truth.">
+<meta name="description" content="Deux tests de neural shading : ambient occlusion et verre. En temps réel, comparés à la ground truth.">
 <link rel="stylesheet" href="style.css">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/",
+  "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.16/build/index.module.js"
 } }
 </script>
 <style>
   #stage { width: min(100vw, 62vh); aspect-ratio: 1; background: #000; }
-  #stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
-  #imgL { clip-path: inset(0 calc(100% - var(--split)) 0 0); }
-  #imgR { clip-path: inset(0 0 0 var(--split)); }
-  #stage img, #stage canvas { pointer-events: none; }
-  #stage #aoCanvas { pointer-events: auto; }
   [hidden] { display: none !important; }
+  #left button, #right button { padding: 7px 8px; }
   .note { color: var(--muted); font-size: 13px; margin: 0; }
   .errs { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 12px; }
   .errs .val { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
@@ -32,8 +29,7 @@
   <div id="view">
     <div id="stage" style="--split: 50%">
       <canvas id="aoCanvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
-      <img id="imgR" alt="">
-      <img id="imgL" alt="">
+      <canvas id="glassCanvas" style="position:absolute;inset:0;width:100%;height:100%" hidden></canvas>
       <div id="handle"></div>
       <span id="tagL" class="tag"></span>
       <span id="tagR" class="tag"></span>

@@ -1,0 +1,1 @@
+{"params": {"radius": 0.04, "thickness": 2, "scale": 1.25, "distanceExponent": 4, "distanceFallOff": 0.25}, "mean": 0.0979, "errors": [0.1155, 0.098, 0.095, 0.0833]}

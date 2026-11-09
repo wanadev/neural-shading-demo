@@ -1,75 +1,99 @@
-// Labo page. AO runs live (labo-ao.js); the ray-traced AO and everything about glass are
-// precomputed images from spikes/ao and spikes/glass.
+// Labo page: two live engines (labo-ao.js, labo-glass.js). Ground truths, the Mitsuba reference and
+// the failed glass network are precomputed images at 4 reference poses: picking one snaps the camera
+// there, and any camera move falls back to a live method.
 const $ = (id) => document.getElementById(id);
 
 const EFFECTS = {
   ao: {
-    label: "Ambient occlusion", live: true,
-    methods: { gt: "Ray tracing", classic: "SSAO classique", neural: "Réseau" },
-    reference: "gt", left: "classic", right: "neural", view: 1,
-    errNote: "Erreur moyenne dans les zones d'ombre, par rapport au ray tracing, après le flou (comme à l'écran), à cette vue de référence. Plus bas, c'est mieux.",
-    note: "SSAO classique et réseau tournent en temps réel, avec le même flou bilatéral. Le ray tracing est précalculé aux 4 vues de référence : le choisir cale la caméra dessus.",
-    story: "Le réseau voit exactement ce que voit un SSAO classique, le depth buffer et les normales autour du pixel, et apprend une AO calculée en ray tracing. Il fait presque deux fois moins d'erreur dans les zones d'ombre et a moins de halos. Mais à l'œil le gain reste modeste, et les deux ratent l'ombre de contact sous le dragon : en screen space, on ne voit pas ce qui est caché.",
+    label: "Ambient occlusion", canvas: "aoCanvas",
+    methods: { gt: "Ray tracing", classic: "SSAO simple", gtao: "GTAO", neural: "Réseau" },
+    reference: "gt", precomputed: ["gt"], fallback: "neural", left: "gtao", right: "neural", view: 1,
+    errNote: "Erreur moyenne dans les zones d'ombre, par rapport au ray tracing, après débruitage (comme à l'écran), à cette vue de référence. Plus bas, c'est mieux.",
+    note: "SSAO simple, GTAO (three.js) et réseau tournent en temps réel. Le ray tracing est précalculé aux 4 vues de référence : le choisir cale la caméra dessus.",
+    story: "Le réseau voit exactement ce que voit un SSAO, le depth buffer et les normales autour du pixel, et apprend une AO calculée en ray tracing. Face au GTAO de three.js, réglé lui aussi au mieux sur les mêmes vues, il reste plus proche du ray tracing. Mais tous ratent une partie de l'ombre de contact sous le dragon : en screen space, on ne voit pas ce qui est caché.",
   },
   glass: {
-    label: "Verre", live: false,
-    methods: { ref: "Mitsuba", traced: "Trajet exact", classic: "Réfraction simple", neural: "Réseau" },
-    reference: "ref", left: "neural", right: "ref", view: 3,
-    errNote: "Erreur moyenne sur le verre, par rapport au rendu Mitsuba. Plus bas, c'est mieux.",
-    note: "Images précalculées en 512 px, pas du temps réel.",
-    story: "Le réseau devait apprendre où la lumière ressort du dragon en verre, rebonds internes compris. Ça ne marche pas : le rendu est granuleux et pas meilleur que la réfraction simple utilisée en temps réel. Dans le verre, deux pixels voisins peuvent ressortir dans des directions opposées, et des latents interpolés en douceur ne savent pas représenter ça. Le trajet exact, lui, se rapproche nettement de Mitsuba.",
+    label: "Verre", canvas: "glassCanvas",
+    methods: { ref: "Mitsuba", traced: "Trajet exact", classic: "Réfraction", neural: "Réseau" },
+    reference: "ref", precomputed: ["ref", "neural"], fallback: "traced", left: "classic", right: "traced", view: 3,
+    errNote: "Erreur moyenne sur le verre, par rapport au rendu Mitsuba, à cette vue de référence. Plus bas, c'est mieux.",
+    note: "Réfraction et trajet exact tournent en temps réel. Le trajet exact lance de vrais rayons à travers le mesh dans le shader (three-mesh-bvh). Mitsuba et le réseau sont précalculés aux 4 vues de référence.",
+    story: "Le réseau devait apprendre où la lumière ressort du dragon en verre. Il échoue : dans le verre, deux pixels voisins peuvent ressortir dans des directions opposées, et des latents interpolés en douceur ne savent pas représenter ça. Ici, le bon outil n'est pas un réseau mais du ray tracing directement dans le shader, qui tient en temps réel.",
   },
 };
 
 const state = { effect: "ao", view: EFFECTS.ao.view, left: EFFECTS.ao.left, right: EFFECTS.ao.right, split: 0.5, applied: true, aoScale: 0.5 };
-const data = {};
-let ao = null;
+const data = {}, engines = {};
+let cfg = null, net = null, glassViews = null, gtaoParams = null;
 
 const seg = (el, items, current, onPick) => {
   el.innerHTML = items.map(([k, v]) => `<button data-k="${k}" class="${k === current ? "on" : ""}">${v}</button>`).join("");
   el.onclick = (e) => { if (e.target.dataset.k !== undefined) onPick(e.target.dataset.k); };
 };
 const fmt = (v) => v.toFixed(3).replace(".", ",");
+const engine = () => engines[state.effect];
+
+async function ensureEngine(effect) {
+  if (engines[effect]) return engines[effect];
+  const canvas = $(EFFECTS[effect].canvas);
+  const e = effect === "ao"
+    ? await (await import("./labo-ao.js")).createAo({ canvas, net, cfg, gtaoParams })
+    : await (await import("./labo-glass.js")).createGlass({ canvas, views: glassViews, cfg });
+  $("stage").append(e.stats.dom);
+  e.onMove(() => {  // a real camera move leaves the reference pose
+    if (state.effect !== effect) return;
+    const fx = EFFECTS[effect];
+    let changed = false;
+    for (const side of ["left", "right"]) if (fx.precomputed.includes(state[side])) { state[side] = fx.fallback; changed = true; }
+    if (changed) render();
+  });
+  e.resize($("stage").clientWidth);
+  e.state.split = state.split;
+  e.setPose(state.view, false);
+  engines[effect] = e;
+  return e;
+}
+
+async function setEffect(k) {
+  Object.assign(state, { effect: k, view: EFFECTS[k].view, left: EFFECTS[k].left, right: EFFECTS[k].right });
+  render();  // hides the other canvas right away
+  const e = await ensureEngine(k);
+  e.setPose(state.view, false);
+  render();
+}
 
 function pickSide(side, k) {
   state[side] = k;
-  if (EFFECTS[state.effect].live && k === "gt" && ao) {  // the ray-traced AO only exists at the reference poses
-    state.view = ao.nearestPose();
-    ao.setPose(state.view);
+  if (EFFECTS[state.effect].precomputed.includes(k) && engine()) {  // only exists at the reference poses
+    state.view = engine().nearestPose();
+    engine().setPose(state.view);
   }
   render();
 }
 
 function render() {
   const fx = EFFECTS[state.effect], d = data[state.effect];
-  seg($("effects"), Object.entries(EFFECTS).map(([k, v]) => [k, v.label]), state.effect, (k) => {
-    Object.assign(state, { effect: k, view: EFFECTS[k].view, left: EFFECTS[k].left, right: EFFECTS[k].right });
-    if (EFFECTS[k].live) ao?.setPose(state.view, false);
-    render();
-  });
+  seg($("effects"), Object.entries(EFFECTS).map(([k, v]) => [k, v.label]), state.effect, setEffect);
   seg($("views"), d.views.map((_, i) => [String(i), String(i + 1)]), String(state.view), (k) => {
     state.view = +k;
-    if (fx.live) ao?.setPose(state.view);
+    engine()?.setPose(state.view);
     render();
   });
   const methods = Object.entries(fx.methods);
   seg($("left"), methods, state.left, (k) => pickSide("left", k));
   seg($("right"), methods, state.right, (k) => pickSide("right", k));
-  const src = (k) => `data/labo/${state.effect}/view${state.view}-${k}.jpg`;
-  for (const [side, img] of [["left", $("imgL")], ["right", $("imgR")]]) {
-    img.hidden = fx.live;  // live AO draws everything, ray-traced reference included, in the canvas
-    if (!fx.live) img.src = src(state[side]);
+  for (const [k, v] of Object.entries(EFFECTS)) {
+    const on = k === state.effect;
+    $(v.canvas).hidden = !on;
+    if (engines[k]) { engines[k].stats.dom.hidden = !on; on ? engines[k].resume() : engines[k].pause(); }
   }
-  $("aoCanvas").hidden = !fx.live;
-  $("aoOptions").hidden = !fx.live;
+  $("aoOptions").hidden = state.effect !== "ao";
   seg($("display"), [["1", "AO appliquée"], ["0", "AO seule"]], state.applied ? "1" : "0", (k) => { state.applied = k === "1"; render(); });
-  seg($("aores"), [["0.5", "demi"], ["1", "pleine"]], String(state.aoScale), (k) => { state.aoScale = +k; ao?.setAoScale(state.aoScale); render(); });
-  if (ao) ao.stats.dom.hidden = !fx.live;
-  if (ao) Object.assign(ao.state, { left: state.left, right: state.right, view: state.view, applied: state.applied });
+  seg($("aores"), [["0.5", "demi"], ["1", "pleine"]], String(state.aoScale), (k) => { state.aoScale = +k; engines.ao?.setAoScale(state.aoScale); render(); });
+  if (engine()) Object.assign(engine().state, { left: state.left, right: state.right, view: state.view, applied: state.applied });
   $("tagL").textContent = fx.methods[state.left];
   $("tagR").textContent = fx.methods[state.right];
-  const errs = d.views[state.view].errors;
-  const rows = Object.entries(errs).filter(([k]) => k !== fx.reference);
+  const rows = Object.entries(d.views[state.view].errors).filter(([k]) => k !== fx.reference && fx.methods[k]);
   const best = Math.min(...rows.map(([, v]) => v));
   $("errs").innerHTML = rows.map(([k, v]) =>
     `<span>${fx.methods[k]}</span><span class="val ${v === best ? "best" : ""}">${fmt(v)}</span>`).join("");
@@ -81,7 +105,7 @@ function render() {
 function placeSplit() {
   $("handle").style.left = `${state.split * 100}%`;
   $("stage").style.setProperty("--split", `${state.split * 100}%`);
-  if (ao) ao.state.split = state.split;
+  for (const e of Object.values(engines)) e.state.split = state.split;
 }
 
 const handle = $("handle");
@@ -98,34 +122,32 @@ handle.addEventListener("pointercancel", () => { dragging = false; });
 
 try {
   const json = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p} : HTTP ${r.status}`); return r.json(); });
-  const [aoData, glass, net, cfg] = await Promise.all(
-    ["data/labo/ao.json", "data/labo/glass.json", "data/labo/ao_net.json", "data/config.json"].map(json));
+  let aoData, glass;
+  [aoData, glass, net, cfg, gtaoParams, glassViews] = await Promise.all([
+    json("data/labo/ao.json"), json("data/labo/glass.json"), json("data/labo/ao_net.json"), json("data/config.json"),
+    json("data/labo/gtao.json").catch(() => null), json("data/labo/glass_views.json")]);
+  if (gtaoParams) aoData.views.forEach((v, i) => { v.errors.gtao = gtaoParams.errors[i]; });
   Object.assign(data, { ao: aoData, glass });
-  const { createAo } = await import("./labo-ao.js");
-  ao = await createAo({ canvas: $("aoCanvas"), net, cfg });
-  $("stage").append(ao.stats.dom);
-  const fit = () => ao.resize($("stage").clientWidth);
-  addEventListener("resize", fit);
-  fit();
-  ao.setPose(state.view, false);
-  ao.onMove(() => {  // a real camera move leaves the reference pose: ray-traced sides fall back to the network
-    if (!EFFECTS[state.effect].live) return;
-    let changed = false;
-    for (const side of ["left", "right"]) if (state[side] === "gt") { state[side] = "neural"; changed = true; }
-    if (changed) render();
-  });
-  const q = new URLSearchParams(location.search);  // deep links: ?effect=ao&left=gt&right=neural&display=0
-  if (Object.hasOwn(EFFECTS, q.get("effect") ?? "")) Object.assign(state, { effect: q.get("effect"), view: EFFECTS[q.get("effect")].view,
-    left: EFFECTS[q.get("effect")].left, right: EFFECTS[q.get("effect")].right });
-  for (const side of ["left", "right"]) if (Object.hasOwn(EFFECTS[state.effect].methods, q.get(side) ?? "")) state[side] = q.get(side);
+
+  const q = new URLSearchParams(location.search);  // deep links: ?effect=glass&left=classic&right=traced&display=0
+  const effect = Object.hasOwn(EFFECTS, q.get("effect") ?? "") ? q.get("effect") : "ao";
+  Object.assign(state, { effect, view: EFFECTS[effect].view, left: EFFECTS[effect].left, right: EFFECTS[effect].right });
+  for (const side of ["left", "right"]) if (Object.hasOwn(EFFECTS[effect].methods, q.get(side) ?? "")) state[side] = q.get(side);
   if (q.get("display") === "0") state.applied = false;
-  if (EFFECTS[state.effect].live) ao.setPose(state.view, false);
+  await ensureEngine(effect);
+  if (q.has("debug")) window.labo = engines;
+  addEventListener("resize", () => { for (const e of Object.values(engines)) e.resize($("stage").clientWidth); });
   placeSplit();
   render();
-  if (q.has("aocheck")) {
-    $("story").textContent = "AO CHECK en cours";
-    const res = await ao.check().catch((e) => { $("story").textContent = "AO CHECK ERREUR " + e.message; throw e; });
-    $("story").textContent = "AO CHECK " + res.map((r) => `vue ${r.view}: écart moyen ${(r.mae * 100).toFixed(2)} %, pixels > 10 % : ${(r.bad * 100).toFixed(2)} %`).join(" | ");
+  for (const [flag, eff] of [["aocheck", "ao"], ["glasscheck", "glass"]]) {
+    if (!q.has(flag)) continue;
+    const e = await ensureEngine(eff);
+    const tag = flag.toUpperCase();
+    $("story").textContent = `${tag} en cours`;
+    const res = await e.check().catch((err) => { $("story").textContent = `${tag} ERREUR ${err.message}`; throw err; });
+    $("story").textContent = `${tag} ` + res.map((r) => `vue ${r.view}: écart moyen ${(r.mae * 100).toFixed(2)} %` +
+      (r.bad !== undefined ? `, pixels > 10 % : ${(r.bad * 100).toFixed(2)} %` : "")).join(" | ");
+    e.resize($("stage").clientWidth);
   }
 } catch (e) {
   document.body.insertAdjacentHTML("afterbegin", `<div id="err">Erreur : ${e.message}</div>`);
