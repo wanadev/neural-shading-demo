@@ -15,9 +15,9 @@ const EFFECTS = {
   glass: {
     label: "Verre", canvas: "glassCanvas",
     methods: { ref: "Mitsuba", traced: "Trajet exact", classic: "Réfraction", neural: "Réseau" },
-    reference: "ref", precomputed: ["ref", "neural"], fallback: "traced", left: "classic", right: "traced", view: 3,
+    reference: "ref", precomputed: ["ref"], fallback: "traced", left: "classic", right: "traced", view: 3,
     errNote: "Erreur moyenne sur le verre, par rapport au rendu Mitsuba, à cette vue de référence. Plus bas, c'est mieux.",
-    note: "Réfraction et trajet exact tournent en temps réel. Le trajet exact lance de vrais rayons à travers le mesh dans le shader (three-mesh-bvh). Mitsuba et le réseau sont précalculés aux 4 vues de référence.",
+    note: "Réfraction, réseau et trajet exact tournent en temps réel. Le trajet exact lance de vrais rayons à travers le mesh dans le shader (three-mesh-bvh). Mitsuba est précalculé aux 4 vues de référence : le choisir cale la caméra dessus.",
     story: "Le réseau devait apprendre où la lumière ressort du dragon en verre. Il échoue : dans le verre, deux pixels voisins peuvent ressortir dans des directions opposées, et des latents interpolés en douceur ne savent pas représenter ça. Ici, le bon outil n'est pas un réseau mais du ray tracing directement dans le shader, qui tient en temps réel.",
   },
 };

@@ -10,15 +10,49 @@ import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import Stats from "three/addons/libs/stats.module.js";
 import { BVHShaderGLSL, FloatVertexAttributeTexture, MeshBVH, MeshBVHUniformStruct } from "three-mesh-bvh";
+import { packWeights } from "./mlp.js";
 import { orbitLimits, viewDir } from "./refs.js";
 
 const IOR = 1.5, ENV_BOOST = 4;  // same as the spike
 
-function glassMaterial(mode, envMap, envScale, bvhUniform, normalTex) {
+// The (failed) glass network of the spike: 8 latents + n + d -> 64 -> 64 -> exit direction, transmittance.
+// Plain ReLU, unlike the jade. Weights in a float texture, same packing as the jade (mlp.js).
+function netGlsl(layout) {
+  const L = layout.layers;
+  const layer = (l, k, act) => `
+  vec4 h${k + 1}[${Math.ceil(l.dout / 4)}];
+  for (int v = 0; v < ${Math.ceil(l.dout / 4)}; v++) h${k + 1}[v] = vec4(0.0);
+  for (int j = 0; j < ${l.dout}; j++) {
+    float s = comp(netv(${l.b} + j / 4), j);
+    for (int v = 0; v < ${l.dinV}; v++) s += dot(netv(${l.w} + j * ${l.dinV} + v), h${k}[v]);
+    h${k + 1}[j / 4] += lane(j) * ${act ? "max(s, 0.0)" : "s"};
+  }`;
+  return `
+uniform highp sampler2D uNet;
+uniform vec4 uLatLo[2], uLatHi[2];
+varying vec4 vLat0, vLat1;
+vec4 netv(int i) { return texelFetch(uNet, ivec2(i % 256, i / 256), 0); }
+vec4 lane(int j) { return vec4(equal(ivec4(0, 1, 2, 3), ivec4(j % 4))); }
+float comp(vec4 v, int j) { return dot(v, lane(j)); }
+void glassNet(vec3 n, vec3 d, out vec3 dir, out float T) {
+  vec4 h0[4];
+  h0[0] = uLatLo[0] + (uLatHi[0] - uLatLo[0]) * vLat0;
+  h0[1] = uLatLo[1] + (uLatHi[1] - uLatLo[1]) * vLat1;
+  h0[2] = vec4(n, d.x); h0[3] = vec4(d.yz, 0.0, 0.0);
+${L.map((l, k) => layer(l, k, k < L.length - 1)).join("")}
+  vec4 o = h${L.length}[0];
+  dir = normalize(o.xyz); T = 1.0 / (1.0 + exp(-o.w));
+}`;
+}
+
+function glassMaterial(mode, envMap, envScale, bvhUniform, normalTex, net) {
   return new THREE.ShaderMaterial({
-    uniforms: { envMap: { value: envMap }, envScale: { value: envScale }, bvh: { value: bvhUniform }, normalAttr: { value: normalTex } },
-    defines: mode === "traced" ? { TRACED: "" } : {},
-    vertexShader: "varying vec3 vP; varying vec3 vN; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vP = w.xyz; vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * w; }",
+    uniforms: { envMap: { value: envMap }, envScale: { value: envScale }, bvh: { value: bvhUniform }, normalAttr: { value: normalTex },
+                uNet: { value: net.tex }, uLatLo: { value: net.lo }, uLatHi: { value: net.hi } },
+    defines: { traced: { TRACED: "" }, neural: { NEURAL: "" } }[mode] ?? {},
+    vertexShader: `attribute vec4 lat0, lat1; varying vec4 vLat0, vLat1; varying vec3 vP; varying vec3 vN;
+      void main() { vLat0 = lat0; vLat1 = lat1; vec4 w = modelMatrix * vec4(position, 1.0); vP = w.xyz;
+        vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * w; }`,
     fragmentShader: /* glsl */ `
 precision highp float;
 precision highp isampler2D;
@@ -32,6 +66,7 @@ uniform sampler2D envMap;
 uniform float envScale;
 varying vec3 vP;
 varying vec3 vN;
+${netGlsl(net.layout)}
 vec3 env(vec3 d) {  // three.js equirectUv
   vec2 uv = vec2(atan(d.z, d.x) * 0.15915494 + 0.5, asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5);
   return texture2D(envMap, uv).rgb * envScale;
@@ -53,7 +88,11 @@ void main() {
   float F0 = fresnel(cosi, ${(1 / IOR).toFixed(8)}, cost, tir);
   vec3 col = F0 * env(reflect(d, n));
   vec3 t = refr(d, n, ${(1 / IOR).toFixed(8)}, cosi, cost);
-#ifndef TRACED
+#if defined(NEURAL)
+  vec3 e; float Tn;
+  glassNet(n, d, e, Tn);
+  col += Tn * env(e);
+#elif !defined(TRACED)
   col += (1.0 - F0) * env(t);
 #else
   float T = 1.0 - F0;
@@ -83,7 +122,21 @@ export async function createGlass({ canvas, views, cfg }) {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.autoClear = false;
-  const [geometry, envSH] = await Promise.all([new PLYLoader().loadAsync("data/dragon.ply"), fetch("data/env_sh.json").then((r) => r.json())]);
+  const [geometry, envSH, netW, lat] = await Promise.all([new PLYLoader().loadAsync("data/dragon.ply"),
+    fetch("data/env_sh.json").then((r) => r.json()), fetch("data/labo/glass_net.json").then((r) => r.json()),
+    fetch("data/labo/glass_latents.bin").then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b))]);
+  const nv = geometry.attributes.position.count;
+  if (lat.length !== nv * 8) throw new Error(`glass latents: ${lat.length / 8} vertices, mesh has ${nv}`);
+  for (const k of [0, 1]) {
+    const a = new Uint8Array(nv * 4);
+    for (let i = 0; i < nv; i++) a.set(lat.subarray(i * 8 + k * 4, i * 8 + k * 4 + 4), i * 4);
+    geometry.setAttribute(`lat${k}`, new THREE.Uint8BufferAttribute(a, 4, true));
+  }
+  const packed = packWeights({ ...netW, in_mean: [], in_std: [], out_log_cap: [] });
+  const netTex = new THREE.DataTexture(packed.data, packed.width, packed.height, THREE.RGBAFormat, THREE.FloatType);
+  netTex.needsUpdate = true;
+  const v4 = (a, k) => new THREE.Vector4(...a.slice(k * 4, k * 4 + 4));
+  const net = { tex: netTex, layout: packed.layout, lo: [v4(netW.latent_lo, 0), v4(netW.latent_lo, 1)], hi: [v4(netW.latent_hi, 0), v4(netW.latent_hi, 1)] };
   const hdr = await new HDRLoader().loadAsync(`data/${envSH.file}`);
   hdr.mapping = THREE.EquirectangularReflectionMapping;
   const envScale = cfg.env.scale * ENV_BOOST;
@@ -106,8 +159,7 @@ export async function createGlass({ canvas, views, cfg }) {
   scene.backgroundIntensity = envScale;
   const dragon = new THREE.Mesh(geometry);
   scene.add(dragon);
-  const mats = { classic: glassMaterial("classic", hdr, envScale, bvhUniform, normalTex),
-                 traced: glassMaterial("traced", hdr, envScale, bvhUniform, normalTex) };
+  const mats = Object.fromEntries(["classic", "traced", "neural"].map((m) => [m, glassMaterial(m, hdr, envScale, bvhUniform, normalTex, net)]));
   // precomputed sides: the image, already tone-mapped, drawn as-is
   const loader = new THREE.TextureLoader();
   const imgs = {};
@@ -157,26 +209,26 @@ export async function createGlass({ canvas, views, cfg }) {
     stats.update();
   });
 
-  // parity: live traced vs the spike's traced image (same path, tone-mapped JPEG), at each pose
+  // parity: live traced and neural vs the spike's images (same path / same network, tone-mapped JPEG), at each pose
   async function check() {
     running = false;
     const saved = { ...state };
     resize(512, 1);
     const out = [];
-    for (let i = 0; i < views.length; i++) {
+    for (const mode of ["traced", "neural"]) for (let i = 0; i < views.length; i++) {
       setPose(i, false);
-      Object.assign(state, { left: "traced", right: "traced", view: i });
+      Object.assign(state, { left: mode, right: mode, view: i });
       render();
       const gl = renderer.getContext(), px = new Uint8Array(512 * 512 * 4);
       gl.readPixels(0, 0, 512, 512, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      const bmp = await createImageBitmap(await (await fetch(`data/labo/glass/view${i}-traced.jpg`)).blob());
+      const bmp = await createImageBitmap(await (await fetch(`data/labo/glass/view${i}-${mode}.jpg`)).blob());
       const c = new OffscreenCanvas(512, 512).getContext("2d"); c.drawImage(bmp, 0, 0);
       const ref = c.getImageData(0, 0, 512, 512).data;
       let sum = 0, n = 0;
       for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) for (let k = 0; k < 3; k++) {
         sum += Math.abs(px[((511 - y) * 512 + x) * 4 + k] - ref[(y * 512 + x) * 4 + k]) / 255; n++;
       }
-      out.push({ view: i + 1, mae: sum / n });
+      out.push({ view: `${mode} ${i + 1}`, mae: sum / n });
     }
     Object.assign(state, saved); running = true;
     return out;

@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/clevasseur/dev/test/neural-shader/spikes/glass/glass_spike.py", line 17, in <module>
+    import mitsuba as mi
+ModuleNotFoundError: No module named 'mitsuba'

@@ -23,6 +23,7 @@ from pipeline.env import read_hdr
 from pipeline.features import barycentric
 from pipeline.gen_data import dragon_mesh
 from pipeline.tonemap import aces_filmic, to_srgb8
+from pipeline.train import quantize
 
 OUT = Path(__file__).parent / "out"
 IOR = 1.5
@@ -188,6 +189,15 @@ def main():
         loss = dir_loss + ((pT - T_[b]) ** 2).mean()
         opt.zero_grad(); loss.backward(); opt.step()
     print(f"trained in {time.time() - t0:.0f}s, final loss {loss.item():.4f}", flush=True)
+    # uint8 latents as in the jade, and the test images below use them too: the live shader gets the same values
+    q, lo, hi = quantize(model.latents)
+    model.latents.data = torch.from_numpy(lo + (hi - lo) * q.astype(np.float32) / 255)
+    import json
+    (LABO.parent / "glass_latents.bin").write_bytes(q.tobytes())
+    (LABO.parent / "glass_net.json").write_text(json.dumps(dict(
+        latent_lo=lo.tolist(), latent_hi=hi.tolist(),
+        layers=[dict(W=l.weight.detach().numpy().tolist(), b=l.bias.detach().numpy().tolist())
+                for l in model.mlp if isinstance(l, torch.nn.Linear)])))
 
     rows, errs = [], {"classic": [], "neural": [], "traced": []}
     LABO.mkdir(parents=True, exist_ok=True)
