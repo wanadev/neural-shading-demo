@@ -70,8 +70,14 @@ def ss_features(pos, nrm, hit, eye, fwd, res):
     p = pos[ys, xs]; n = nrm[ys, xs] / np.linalg.norm(nrm[ys, xs], axis=1, keepdims=True)
     z = (p - eye) @ fwd
     rad_px = R * f / np.maximum(z, 1e-3)
+    # per-pixel rotation of the pattern by interleaved gradient noise (same formula as the shader,
+    # on GL pixel coordinates: rows counted from the bottom). Breaks the banding a fixed pattern
+    # leaves, the blur then removes the noise.
+    ign = np.modf(52.9829189 * np.modf(0.06711056 * xs + 0.00583715 * (H - 1 - ys))[0])[0]
+    c, s = np.cos(2 * np.pi * ign), np.sin(2 * np.pi * ign)
     feats = []
-    for ox, oy in PATTERN:
+    for px_, py_ in PATTERN:
+        ox, oy = c * px_ - s * py_, s * px_ + c * py_
         sx = np.clip(np.round(xs + ox * rad_px), 0, W - 1).astype(int)
         sy = np.clip(np.round(ys + oy * rad_px), 0, H - 1).astype(int)
         valid = hit[sy, sx]
@@ -80,6 +86,22 @@ def ss_features(pos, nrm, hit, eye, fwd, res):
         nd = np.where(valid, (n * d).sum(1) / R, 0.0)
         feats += [np.clip(nd, -4, 4), np.where(valid, np.clip(dist / R, 0, 4), 4.0)]
     return np.concatenate([np.stack(feats, 1), n], 1).astype(np.float32), ys, xs
+
+
+def bilateral(img, pos, nrm, hit):
+    """Mirror of the page's separable blur: 9 taps, gaussian x normal x position weights."""
+    H, W = hit.shape
+    n = nrm / np.maximum(np.linalg.norm(nrm, axis=-1, keepdims=True), 1e-8)
+    Y, X = np.mgrid[0:H, 0:W]
+    for dx, dy in ((1, 0), (0, 1)):
+        acc, wsum = np.zeros((H, W)), np.zeros((H, W))
+        for i in range(-4, 5):
+            yy, xx = np.clip(Y + i * dy, 0, H - 1), np.clip(X + i * dx, 0, W - 1)
+            dz = np.linalg.norm(pos[yy, xx] - pos, axis=-1) / (0.25 * R)
+            w = (np.exp(-i * i / 8) * np.maximum((n * n[yy, xx]).sum(-1), 0) ** 8 * np.exp(-dz * dz) * hit[yy, xx])
+            acc += img[yy, xx] * w; wsum += w
+        img = np.where(hit, acc / np.maximum(wsum, 1e-5), 1.0)
+    return img
 
 
 def make_view(i, rng):
@@ -98,7 +120,7 @@ def dataset(n_views, seed, res):
         ao = gt_ao(sc, pos, nrm, hit, rng)
         x, ys, xs = ss_features(pos, nrm, hit, eye, fwd, res)
         X.append(x); Y.append(ao[ys, xs])
-        imgs.append((hit, ys, xs, ao, v))
+        imgs.append((hit, ys, xs, ao, v, pos, nrm))
     return np.concatenate(X), np.concatenate(Y), imgs
 
 
@@ -146,7 +168,7 @@ def main():
     print(f"classic params s={classic.s.item():.3f} bias={classic.bias.item():.3f}")
     # comparison sheet: rows = test views, columns = ground truth | classic | neural
     rows, off = [], 0
-    for hit, ys, xs, ao, _ in test_imgs[:3]:
+    for hit, ys, xs, ao, *_ in test_imgs[:3]:
         n = len(ys)
         tiles = []
         for vals in (ao[ys, xs], pc[off:off + n], pn[off:off + n]):
@@ -161,17 +183,19 @@ def main():
     import json
     LABO.mkdir(parents=True, exist_ok=True)
     views, off = [], 0
-    for i, (hit, ys, xs, ao, _) in enumerate(test_imgs):
+    for i, (hit, ys, xs, ao, _, pos, nrm) in enumerate(test_imgs):
         n = len(ys)
-        gt, err = ao[ys, xs], {}
+        gt, err, raw = ao[ys, xs], {}, {}
         occ = gt < 0.9
         for key, vals in (("gt", gt), ("classic", pc[off:off + n]), ("neural", pn[off:off + n])):
             img = np.ones(hit.shape, np.float32)
             img[ys, xs] = vals
             g8 = (np.clip(img, 0, 1) * 255).astype(np.uint8)
             mi.Bitmap(np.ascontiguousarray(np.repeat(g8[..., None], 3, 2))).write(str(LABO / f"view{i}-{key}.jpg"))
-            err[key] = round(float(np.abs(vals - gt)[occ].mean()), 4)
-        views.append(dict(errors=err))
+            raw[key] = round(float(np.abs(vals - gt)[occ].mean()), 4)
+            if key != "gt":  # what the page shows: the same bilateral blur as the shader
+                err[key] = round(float(np.abs(bilateral(img, pos, nrm, hit)[ys, xs] - gt)[occ].mean()), 4)
+        views.append(dict(errors=err, errors_raw=raw))
         off += n
     (LABO.parent / "ao.json").write_text(json.dumps(dict(views=views, mae_occluded=dict(
         classic=round(float(np.abs(pc - Yte)[occluded].mean()), 4), neural=round(float(np.abs(pn - Yte)[occluded].mean()), 4))), indent=1))
@@ -181,7 +205,7 @@ def main():
         K=K, R=R, pattern=PATTERN.tolist(),
         layers=[dict(W=l.weight.detach().numpy().tolist(), b=l.bias.detach().numpy().tolist()) for l in lin],
         classic=dict(s=classic.s.item(), bias=classic.bias.item()),
-        views=[dict(az_deg=float(v["az_deg"]), el_deg=float(v["el_deg"]), radius=float(v["radius"])) for *_, v in test_imgs])))
+        views=[dict(az_deg=float(v["az_deg"]), el_deg=float(v["el_deg"]), radius=float(v["radius"])) for _, _, _, _, v, *_ in test_imgs])))
     print("labo export ->", LABO)
 
 

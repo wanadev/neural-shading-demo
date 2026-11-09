@@ -70,13 +70,16 @@ void main() {
   if (P.a < 0.5) { gl_FragColor = vec4(1.0); return; }
   vec3 n = normalize(texelFetch(tNrm, ip, 0).xyz);
   float rad = uR * uFocal / max(dot(P.xyz - uEye, uFwd), 1e-3);
+  float ign = fract(52.9829189 * fract(0.06711056 * float(ip.x) + 0.00583715 * float(ip.y)));
+  float ca = cos(6.28318531 * ign), sa = sin(6.28318531 * ign);
 #ifdef NEURAL
   float f[${2 * K + 4}];
 #else
   float acc = 0.0;
 #endif
   for (int k = 0; k < ${K}; k++) {
-    vec2 o = PAT[k] * rad;
+    vec2 pk = PAT[k];
+    vec2 o = vec2(ca * pk.x - sa * pk.y, sa * pk.x + ca * pk.y) * rad;
     ivec2 sp = clamp(ip + ivec2(int(round(o.x)), -int(round(o.y))), ivec2(0), size - 1);  // numpy rows go down
     vec4 Q = texelFetch(tPos, sp, 0);
     bool valid = Q.a > 0.5;
@@ -128,23 +131,71 @@ export async function createAo({ canvas, net, cfg }) {
   scene.add(dragon, ground);
   const mPos = gmat("vP"), mNrm = gmat("normalize(vN)");
 
-  let rtPos, rtNrm, rtAo, aoScale = 0.5;
+  let rtPos, rtNrm, rtAo, rtBlurA, rtBlurB, aoScale = 0.5;
   const uniforms = { tPos: { value: null }, tNrm: { value: null }, uEye: { value: new THREE.Vector3() },
     uFwd: { value: new THREE.Vector3() }, uFocal: { value: 1 }, uR: { value: net.R } };
   const mats = { classic: aoMaterial(net, "classic", uniforms), neural: aoMaterial(net, "neural", uniforms) };
   const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
   const quadScene = new THREE.Scene(); quadScene.add(quad);
-  const blit = new THREE.ShaderMaterial({ uniforms: { t: { value: null } },
-    vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
-    fragmentShader: "precision highp float; uniform sampler2D t; varying vec2 vUv; void main() { gl_FragColor = texture2D(t, vUv); }" });
   const ortho = new THREE.Camera();
+
+  // depth- and normal-aware separable blur: removes the rotation noise, keeps edges
+  const blurMat = new THREE.ShaderMaterial({
+    uniforms: { tAo: { value: null }, tPos: uniforms.tPos, tNrm: uniforms.tNrm, uDir: { value: new THREE.Vector2(1, 0) }, uR: uniforms.uR },
+    vertexShader: "void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }",
+    fragmentShader: /* glsl */ `
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D tAo, tPos, tNrm;
+uniform vec2 uDir;
+uniform float uR;
+void main() {
+  ivec2 size = textureSize(tPos, 0), ip = ivec2(gl_FragCoord.xy);
+  vec4 P = texelFetch(tPos, ip, 0);
+  if (P.a < 0.5) { gl_FragColor = vec4(1.0); return; }
+  vec3 n = texelFetch(tNrm, ip, 0).xyz;
+  float sum = 0.0, wsum = 0.0;
+  for (int i = -4; i <= 4; i++) {
+    ivec2 q = clamp(ip + ivec2(uDir) * i, ivec2(0), size - 1);
+    vec4 Q = texelFetch(tPos, q, 0);
+    if (Q.a < 0.5) continue;
+    vec3 m = texelFetch(tNrm, q, 0).xyz;
+    float dz = length(Q.xyz - P.xyz) / (0.25 * uR);
+    float w = exp(-float(i * i) / 8.0) * pow(max(dot(n, m), 0.0), 8.0) * exp(-dz * dz);
+    sum += texelFetch(tAo, q, 0).r * w; wsum += w;
+  }
+  gl_FragColor = vec4(vec3(sum / max(wsum, 1e-5)), 1.0);
+}`,
+  });
+
+  // final pass, full resolution: the scene itself, shaded as clay x AO (or AO alone)
+  const compMat = new THREE.ShaderMaterial({
+    uniforms: { tAo: { value: null }, uScreen: { value: new THREE.Vector2(1, 1) }, uApplied: { value: 1 } },
+    vertexShader: "varying vec3 vN; void main() { vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0); }",
+    fragmentShader: /* glsl */ `
+precision highp float;
+uniform sampler2D tAo;
+uniform vec2 uScreen;
+uniform float uApplied;
+varying vec3 vN;
+void main() {
+  float ao = texture2D(tAo, gl_FragCoord.xy / uScreen).r;
+  vec3 n = normalize(vN);
+  float hemi = mix(0.45, 1.0, n.y * 0.5 + 0.5);
+  float key = max(dot(n, normalize(vec3(0.4, 0.8, 0.3))), 0.0);
+  vec3 clay = vec3(0.86, 0.84, 0.80) * (0.75 * hemi + 0.35 * key);
+  gl_FragColor = vec4(mix(vec3(ao), clay * ao, uApplied), 1.0);
+}`,
+  });
+  const gtTex = net.views.map((_, i) => new THREE.TextureLoader().load(`data/labo/ao/view${i}-gt.jpg`));
 
   let size = 0;
   function allocate() {
     const px = Math.max(64, Math.round(size * renderer.getPixelRatio() * aoScale));
-    for (const rt of [rtPos, rtNrm, rtAo]) rt?.dispose();
+    for (const rt of [rtPos, rtNrm, rtAo, rtBlurA, rtBlurB]) rt?.dispose();
     const mk = (type, filter) => new THREE.WebGLRenderTarget(px, px, { type, minFilter: filter, magFilter: filter, depthBuffer: type !== THREE.UnsignedByteType });
-    rtPos = mk(floatRT, THREE.NearestFilter); rtNrm = mk(floatRT, THREE.NearestFilter); rtAo = mk(THREE.UnsignedByteType, THREE.LinearFilter);
+    rtPos = mk(floatRT, THREE.NearestFilter); rtNrm = mk(floatRT, THREE.NearestFilter); rtAo = mk(THREE.UnsignedByteType, THREE.NearestFilter);
+    rtBlurA = mk(THREE.UnsignedByteType, THREE.NearestFilter); rtBlurB = mk(THREE.UnsignedByteType, THREE.LinearFilter);
     uniforms.tPos.value = rtPos.texture; uniforms.tNrm.value = rtNrm.texture;
     uniforms.uFocal.value = (px / 2) / Math.tan(THREE.MathUtils.degToRad(cfg.camera.fov_y) / 2);
   }
@@ -155,7 +206,7 @@ export async function createAo({ canvas, net, cfg }) {
     allocate();
   }
 
-  const state = { left: "classic", right: "neural", split: 0.5 };
+  const state = { left: "classic", right: "neural", split: 0.5, view: 0, applied: true };
   function render() {
     const fwd = target.clone().sub(camera.position).normalize();
     uniforms.uEye.value.copy(camera.position); uniforms.uFwd.value.copy(fwd);
@@ -173,10 +224,26 @@ export async function createAo({ canvas, net, cfg }) {
       renderer.render(quadScene, ortho);
     }
     rtAo.scissorTest = false;
+    quad.material = blurMat;
+    for (const [src, dst, dir] of [[rtAo, rtBlurA, [1, 0]], [rtBlurA, rtBlurB, [0, 1]]]) {
+      blurMat.uniforms.tAo.value = src.texture; blurMat.uniforms.uDir.value.set(...dir);
+      renderer.setRenderTarget(dst); renderer.render(quadScene, ortho);
+    }
     renderer.setRenderTarget(null);
     renderer.setClearColor(0xffffff, 1); renderer.clear();
-    blit.uniforms.t.value = rtAo.texture; quad.material = blit;
-    renderer.render(quadScene, ortho);
+    const pr = renderer.getPixelRatio(), cut = Math.round(state.split * size);
+    compMat.uniforms.uScreen.value.set(size * pr, size * pr);
+    compMat.uniforms.uApplied.value = state.applied ? 1 : 0;
+    scene.overrideMaterial = compMat;
+    renderer.setScissorTest(true);
+    for (const [side, x0, w] of [["left", 0, cut], ["right", cut, size - cut]]) {
+      if (w <= 0) continue;
+      compMat.uniforms.tAo.value = state[side] === "gt" ? gtTex.at(state.view) : rtBlurB.texture;
+      renderer.setScissor(x0, 0, w, size);
+      renderer.render(scene, camera);
+    }
+    renderer.setScissorTest(false);
+    scene.overrideMaterial = null;
   }
 
   let tween = null;

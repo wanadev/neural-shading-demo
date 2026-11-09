@@ -2,35 +2,51 @@
  "views": [
   {
    "errors": {
+    "classic": 0.1379,
+    "neural": 0.089
+   },
+   "errors_raw": {
     "gt": 0.0,
-    "classic": 0.1528,
-    "neural": 0.0952
+    "classic": 0.1507,
+    "neural": 0.1042
    }
   },
   {
    "errors": {
+    "classic": 0.1432,
+    "neural": 0.0782
+   },
+   "errors_raw": {
     "gt": 0.0,
-    "classic": 0.1615,
-    "neural": 0.0827
+    "classic": 0.1581,
+    "neural": 0.0926
    }
   },
   {
    "errors": {
+    "classic": 0.1264,
+    "neural": 0.0635
+   },
+   "errors_raw": {
     "gt": 0.0,
-    "classic": 0.1469,
-    "neural": 0.0755
+    "classic": 0.1447,
+    "neural": 0.0803
    }
   },
   {
    "errors": {
+    "classic": 0.1589,
+    "neural": 0.0837
+   },
+   "errors_raw": {
     "gt": 0.0,
-    "classic": 0.176,
-    "neural": 0.0776
+    "classic": 0.171,
+    "neural": 0.0975
    }
   }
  ],
  "mae_occluded": {
-  "classic": 0.1605,
-  "neural": 0.0817
+  "classic": 0.1572,
+  "neural": 0.0924
  }
 }

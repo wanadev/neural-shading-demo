@@ -7,8 +7,8 @@ const EFFECTS = {
     label: "Ambient occlusion", live: true,
     methods: { gt: "Ray tracing", classic: "SSAO classique", neural: "Réseau" },
     reference: "gt", left: "classic", right: "neural", view: 1,
-    errNote: "Erreur moyenne dans les zones d'ombre, par rapport au ray tracing, mesurée à cette vue de référence. Plus bas, c'est mieux.",
-    note: "SSAO classique et réseau tournent en temps réel (AO en demi-résolution). Le ray tracing est précalculé aux 4 vues de référence : le choisir cale la caméra dessus.",
+    errNote: "Erreur moyenne dans les zones d'ombre, par rapport au ray tracing, après le flou (comme à l'écran), à cette vue de référence. Plus bas, c'est mieux.",
+    note: "SSAO classique et réseau tournent en temps réel, avec le même flou bilatéral. Le ray tracing est précalculé aux 4 vues de référence : le choisir cale la caméra dessus.",
     story: "Le réseau voit exactement ce que voit un SSAO classique, le depth buffer et les normales autour du pixel, et apprend une AO calculée en ray tracing. Il fait presque deux fois moins d'erreur dans les zones d'ombre et a moins de halos. Mais à l'œil le gain reste modeste, et les deux ratent l'ombre de contact sous le dragon : en screen space, on ne voit pas ce qui est caché.",
   },
   glass: {
@@ -21,7 +21,7 @@ const EFFECTS = {
   },
 };
 
-const state = { effect: "ao", view: EFFECTS.ao.view, left: EFFECTS.ao.left, right: EFFECTS.ao.right, split: 0.5 };
+const state = { effect: "ao", view: EFFECTS.ao.view, left: EFFECTS.ao.left, right: EFFECTS.ao.right, split: 0.5, applied: true, aoScale: 0.5 };
 const data = {};
 let ao = null;
 
@@ -57,13 +57,15 @@ function render() {
   seg($("right"), methods, state.right, (k) => pickSide("right", k));
   const src = (k) => `data/labo/${state.effect}/view${state.view}-${k}.jpg`;
   for (const [side, img] of [["left", $("imgL")], ["right", $("imgR")]]) {
-    const show = !fx.live || state[side] === fx.reference;
-    img.hidden = !show;
-    if (show) img.src = src(state[side]);
+    img.hidden = fx.live;  // live AO draws everything, ray-traced reference included, in the canvas
+    if (!fx.live) img.src = src(state[side]);
   }
   $("aoCanvas").hidden = !fx.live;
+  $("aoOptions").hidden = !fx.live;
+  seg($("display"), [["1", "AO appliquée"], ["0", "AO seule"]], state.applied ? "1" : "0", (k) => { state.applied = k === "1"; render(); });
+  seg($("aores"), [["0.5", "demi"], ["1", "pleine"]], String(state.aoScale), (k) => { state.aoScale = +k; ao?.setAoScale(state.aoScale); render(); });
   if (ao) ao.stats.dom.hidden = !fx.live;
-  if (ao) Object.assign(ao.state, { left: state.left, right: state.right });
+  if (ao) Object.assign(ao.state, { left: state.left, right: state.right, view: state.view, applied: state.applied });
   $("tagL").textContent = fx.methods[state.left];
   $("tagR").textContent = fx.methods[state.right];
   const errs = d.views[state.view].errors;
@@ -112,9 +114,15 @@ try {
     for (const side of ["left", "right"]) if (state[side] === "gt") { state[side] = "neural"; changed = true; }
     if (changed) render();
   });
+  const q = new URLSearchParams(location.search);  // deep links: ?effect=ao&left=gt&right=neural&display=0
+  if (Object.hasOwn(EFFECTS, q.get("effect") ?? "")) Object.assign(state, { effect: q.get("effect"), view: EFFECTS[q.get("effect")].view,
+    left: EFFECTS[q.get("effect")].left, right: EFFECTS[q.get("effect")].right });
+  for (const side of ["left", "right"]) if (Object.hasOwn(EFFECTS[state.effect].methods, q.get(side) ?? "")) state[side] = q.get(side);
+  if (q.get("display") === "0") state.applied = false;
+  if (EFFECTS[state.effect].live) ao.setPose(state.view, false);
   placeSplit();
   render();
-  if (new URLSearchParams(location.search).has("aocheck")) {
+  if (q.has("aocheck")) {
     $("story").textContent = "AO CHECK en cours";
     const res = await ao.check().catch((e) => { $("story").textContent = "AO CHECK ERREUR " + e.message; throw e; });
     $("story").textContent = "AO CHECK " + res.map((r) => `vue ${r.view}: écart moyen ${(r.mae * 100).toFixed(2)} %, pixels > 10 % : ${(r.bad * 100).toFixed(2)} %`).join(" | ");
