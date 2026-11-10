@@ -1,5 +1,5 @@
   :root {
-    --bg: #070807; --panel: #0f1110; --line: #1f2321; --fg: #e8ece9; --muted: #7c8781; --dim: #4c5550;
+    --bg: #070807; --panel: #0f1110; --line: #1f2321; --fg: #e8ece9; --muted: #939e98; --dim: #78827c; /* dim: 4.5:1 on the panel (WCAG AA) */
     --jade: #7fe0a0; --jade-ink: #08261a; --warn: #f0b35a;
   }
   * { box-sizing: border-box; }
@@ -49,6 +49,7 @@
   .foot { margin-top: auto; color: var(--dim); font-size: 11px; line-height: 1.5; }
   .foot a { color: var(--muted); }
   #err { color: #f88; padding: 16px; }
+  :focus-visible { outline: 2px solid var(--jade); outline-offset: 2px; }
 
   @media (min-width: 900px) {
     #app { grid-template-columns: minmax(0, 1fr) 320px; height: 100%; }

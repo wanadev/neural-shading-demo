@@ -1,6 +1,8 @@
 // Labo page: two live engines (labo-ao.js, labo-glass.js). The ray-traced AO and the Mitsuba glass
 // reference are precomputed images at 4 reference poses: picking one snaps the camera there, and any
 // camera move falls back to a live method.
+import { curtainHandle, showError } from "./ui.js";
+
 const $ = (id) => document.getElementById(id);
 
 const EFFECTS = {
@@ -27,7 +29,7 @@ const data = {}, engines = {};
 let cfg = null, net = null, glassViews = null, gtaoParams = null;
 
 const seg = (el, items, current, onPick) => {
-  el.innerHTML = items.map(([k, v]) => `<button data-k="${k}" class="${k === current ? "on" : ""}">${v}</button>`).join("");
+  el.innerHTML = items.map(([k, v]) => `<button data-k="${k}" class="${k === current ? "on" : ""}" aria-pressed="${k === current}">${v}</button>`).join("");
   el.onclick = (e) => { if (e.target.dataset.k !== undefined) onPick(e.target.dataset.k); };
 };
 const fmt = (v) => v.toFixed(3).replace(".", ",");
@@ -35,7 +37,8 @@ const engine = () => engines[state.effect];
 
 const creating = {};
 function ensureEngine(effect) {
-  return engines[effect] ? Promise.resolve(engines[effect]) : (creating[effect] ??= createEngine(effect));
+  if (engines[effect]) return Promise.resolve(engines[effect]);
+  return (creating[effect] ??= createEngine(effect).catch((e) => { delete creating[effect]; throw e; })); // retry on next pick
 }
 async function createEngine(effect) {
   const canvas = $(EFFECTS[effect].canvas);
@@ -60,7 +63,8 @@ async function createEngine(effect) {
 async function setEffect(k) {
   Object.assign(state, { effect: k, view: EFFECTS[k].view, left: EFFECTS[k].left, right: EFFECTS[k].right });
   render();  // hides the other canvas right away
-  const e = await ensureEngine(k);
+  const e = await ensureEngine(k).catch(showError);
+  if (!e) return;
   e.setPose(state.view, false);
   render();
 }
@@ -105,26 +109,13 @@ function render() {
   $("story").textContent = fx.story;
 }
 
-function placeSplit() {
-  $("handle").style.left = `${state.split * 100}%`;
-  $("stage").style.setProperty("--split", `${state.split * 100}%`);
-  for (const e of Object.values(engines)) e.state.split = state.split;
-}
-
-const handle = $("handle");
-let dragging = false;
-handle.addEventListener("pointerdown", (e) => { dragging = true; handle.setPointerCapture(e.pointerId); e.stopPropagation(); });
-handle.addEventListener("pointermove", (e) => {
-  if (!dragging) return;
-  const r = $("stage").getBoundingClientRect();
-  state.split = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-  placeSplit();
+const placeSplit = curtainHandle($("handle"), $("stage"), () => state.split, (s) => {
+  state.split = s;
+  for (const e of Object.values(engines)) e.state.split = s;
 });
-handle.addEventListener("pointerup", () => { dragging = false; });
-handle.addEventListener("pointercancel", () => { dragging = false; });
 
 try {
-  const json = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p} : HTTP ${r.status}`); return r.json(); });
+  const json = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p}: ${r.status}`); return r.json(); });
   let aoData, glass;
   [aoData, glass, net, cfg, gtaoParams, glassViews] = await Promise.all([
     json("data/labo/ao.json"), json("data/labo/glass.json"), json("data/labo/ao_net.json"), json("data/config.json"),
@@ -154,6 +145,6 @@ try {
       (r.bad !== undefined ? `, pixels > 10 % : ${(r.bad * 100).toFixed(2)} %` : "")).join(" | ");
   }
 } catch (e) {
-  document.body.insertAdjacentHTML("afterbegin", `<div id="err">Erreur : ${e.message}</div>`);
+  showError(e);
   throw e;
 }

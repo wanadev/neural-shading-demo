@@ -16,7 +16,7 @@ from pipeline.config import WEB_DATA
 from pipeline.dragon import write_ply
 
 
-def _frame(n):
+def tangent_frame(n):
     a = np.where(np.abs(n[:, 0:1]) < 0.9, [[1.0, 0, 0]], [[0, 1.0, 0]])
     t = np.cross(n, a); t /= np.linalg.norm(t, axis=1, keepdims=True)
     return t, np.cross(n, t)
@@ -29,7 +29,7 @@ def vertex_thickness(V, F, N, rays=32, seed=0) -> np.ndarray:
         scene = mi.load_dict({"type": "scene", "m": dict(type="ply", filename=str(p), face_normals=True)})
     n = -np.asarray(N, np.float64)  # inward
     n /= np.linalg.norm(n, axis=1, keepdims=True)
-    t, b = _frame(n)
+    t, b = tangent_frame(n)
     rng = np.random.default_rng(seed)
     u1, u2 = rng.random((2, len(V), rays))
     r, phi = np.sqrt(u1), 2 * np.pi * u2  # cosine-weighted hemisphere

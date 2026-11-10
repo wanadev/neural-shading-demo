@@ -20,7 +20,7 @@ def test_prepare_is_closed_scaled_grounded():
     assert np.allclose(np.linalg.norm(N, axis=1), 1, atol=1e-4)
 
 
-def test_ply_roundtrip_keeps_vertex_order(tmp_path):  # Review Focus #2
+def test_ply_roundtrip_keeps_vertex_order(tmp_path):
     V, F, N = prepare(holed_sphere(), 500, 0.15)
     write_ply(tmp_path / "d.ply", V, F, N)
     m = trimesh.load(tmp_path / "d.ply", process=False)

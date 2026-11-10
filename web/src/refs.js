@@ -33,7 +33,7 @@ export function orbitLimits(cfg) {
 export const leaveRef = (sides) =>
   Object.fromEntries(Object.entries(sides).map(([k, v]) => [k, v === "ref" ? "neural" : v]));
 
-// Run fn with the camera at a fixed pose, then restore it (cost scales with candle screen
+// Run fn with the camera at a fixed pose, then restore it (cost scales with dragon screen
 // coverage, so benchmarks must not depend on where the user left the camera).
 export async function withPose(camera, position, target, fn) {
   const saved = camera.position.clone();

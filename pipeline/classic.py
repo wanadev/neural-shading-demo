@@ -11,12 +11,12 @@ import trimesh
 
 from pipeline.config import WEB_DATA
 from pipeline.env import sh_basis
-from pipeline.train import _split, clamp_fireflies, rel_err
+from pipeline.train import clamp_fireflies, rel_err, split_views
 
 KEYS3 = ("tint_d", "tint_t", "tint_e", "tint_eb")
 
 
-def _terms(nrm, pos, cam, lamp, xp):
+def _terms(pos, cam, lamp, xp):
     to_l = lamp - pos
     d = xp.sqrt((to_l ** 2).sum(-1, keepdims=True))
     L = to_l / d
@@ -31,7 +31,7 @@ def classic_sss(nrm, pos, cam, lamp, th, sh, p) -> np.ndarray:
     env  = tint_e * E(n) + tint_eb * E(-n) * exp(-k th)"""
     nrm, pos, cam, lamp = (np.asarray(a, np.float64) for a in (nrm, pos, cam, lamp))
     th = np.asarray(th, np.float64)[:, None]
-    L, d, V = _terms(nrm, pos, cam, lamp, np)
+    L, d, V = _terms(pos, cam, lamp, np)
     wrap = np.maximum(((nrm * L).sum(-1, keepdims=True) + p["w"]) / (1 + p["w"]), 0)
     h = L + nrm * p["dist"]
     h /= np.linalg.norm(h, axis=-1, keepdims=True)
@@ -42,7 +42,8 @@ def classic_sss(nrm, pos, cam, lamp, th, sh, p) -> np.ndarray:
     return np.concatenate([env_t, lamp_t], 1)
 
 
-def _load_defaults():
+def load_classic_inputs():
+    """-> faces, per-vertex thickness (metres), SH of the room (scaled like in three.js)."""
     m = trimesh.load(WEB_DATA / "dragon.ply", process=False)
     cfg = json.loads((WEB_DATA / "config.json").read_text())
     vert_th = np.frombuffer((WEB_DATA / "thickness.bin").read_bytes(), np.uint8) / 255 * cfg["thickness_max"]
@@ -51,19 +52,19 @@ def _load_defaults():
 
 
 def fit_classic(npz_path, F=None, vert_th=None, sh=None, steps=3000, lr=0.03, seed=0, max_train=300_000):
-    if F is None:
-        F, vert_th, sh = _load_defaults()
+    if F is None or vert_th is None or sh is None:
+        F, vert_th, sh = load_classic_inputs()
     d = np.load(npz_path)
     th = (d["bary"] * np.asarray(vert_th)[np.asarray(F)[d["tri"]]]).sum(1)
     Y = clamp_fireflies(np.concatenate([d["Y_env"], d["Y_lamp"]], 1))  # same targets as the network
-    tr, va = _split(d["view_id"])
+    tr, va = split_views(d["view_id"])
     if tr.sum() > max_train:  # full-batch fit of ~15 parameters: a fixed random subset is plenty
         keep = np.random.default_rng(seed).choice(np.flatnonzero(tr), max_train, replace=False)
         tr = np.zeros_like(tr); tr[keep] = True
     t = lambda a: torch.tensor(np.asarray(a), dtype=torch.float64)
     nrm, pos, cam, lamp, TH = t(d["nrm"]), t(d["pos"]), t(d["cam"]), t(d["lamp"]), t(th)[:, None]
     En, Em = t(sh_basis(d["nrm"].astype(np.float64)) @ sh), t(sh_basis(-d["nrm"].astype(np.float64)) @ sh)
-    L, dist, V = _terms(nrm, pos, cam, lamp, torch)
+    L, dist, V = _terms(pos, cam, lamp, torch)
     ndl = (nrm * L).sum(-1, keepdims=True)
     Yt = t(Y)
     torch.manual_seed(seed)
@@ -95,7 +96,7 @@ def fit_classic(npz_path, F=None, vert_th=None, sh=None, steps=3000, lr=0.03, se
     trt = torch.from_numpy(tr)
     for _ in range(steps):
         pred = model(trt)
-        loss = ((pred - Yt[trt]) ** 2 / (pred.detach() + 0.01) ** 2).mean()
+        loss = ((pred - Yt[trt]) ** 2 / (pred.detach() + 0.01) ** 2).mean()  # relative MSE, 0.01 floors near-black
         opt.zero_grad(); loss.backward(); opt.step()
     with torch.no_grad():
         err = rel_err(model(torch.from_numpy(va)).numpy(), Y[va])

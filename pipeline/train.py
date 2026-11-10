@@ -3,6 +3,7 @@ Output = 6 values: SSS due to the room (RGB) | SSS due to the lamp (RGB).
 python -m pipeline.train  -> web/data/weights_{w}.json, latents_{w}.bin, selftest.json"""
 import argparse
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +26,7 @@ class NeuralSSS(nn.Module):
         dims = [latent_dim + N_RAW] + [width] * depth
         self.hidden = nn.ModuleList(nn.Linear(a, b) for a, b in zip(dims, dims[1:]))
         self.out = nn.Linear(width, 6)
-        self.register_buffer("log_cap", torch.full((6,), 80.0))
+        self.register_buffer("log_cap", torch.full((6,), 80.0))  # ~float32 exp() limit until set_output_cap
 
     def set_output_cap(self, cap):
         """Bound exp(): without it a few unseen input combinations produced values 60x the
@@ -43,7 +44,7 @@ class NeuralSSS(nn.Module):
         return torch.exp(torch.minimum(self.out(x), self.log_cap))
 
 
-def _split(view_id, frac=0.1, seed=0):
+def split_views(view_id, frac=0.1, seed=0):
     views = np.unique(view_id)
     val = np.random.default_rng(seed).choice(views, max(1, int(len(views) * frac)), replace=False)
     is_val = np.isin(view_id, val)
@@ -59,10 +60,17 @@ def clamp_fireflies(Y, pct=99.99, factor=1.5):
     return np.minimum(Y, factor * np.percentile(Y, pct, axis=0)).astype(np.float32)
 
 
-def _load(npz_path, F):
-    d = np.load(npz_path)
+@lru_cache(maxsize=1)
+def _load_samples(npz_path: str):
+    """Millions of samples: loaded once per run (train + finetune for each width reuse them)."""
+    d = dict(np.load(npz_path))
     raw = raw_features(d["nrm"], d["pos"], d["cam"], d["lamp"])
     Y = clamp_fireflies(np.concatenate([d["Y_env"], d["Y_lamp"]], 1))
+    return d, raw, Y
+
+
+def _load(npz_path, F):
+    d, raw, Y = _load_samples(str(npz_path))
     return d, raw, Y, np.asarray(F)[d["tri"]]
 
 
@@ -93,15 +101,15 @@ def _val_err(model, TV, B, R, Y, va):
 def train(npz_path, F, n_vertices, width, epochs=30, batch=8192, lr=3e-3, seed=0):
     torch.manual_seed(seed)
     d, raw, Y, tv = _load(npz_path, F)
-    tr, va = _split(d["view_id"])
+    tr, va = split_views(d["view_id"])
     mean, std = raw[tr].mean(0), raw[tr].std(0) + 1e-6
     TV, B, R, Yt = _tensors(raw, mean, std, Y, tv, d)
     model = NeuralSSS(n_vertices, width)
-    model.set_output_cap(1.2 * Y[tr].max(0))
+    model.set_output_cap(1.2 * Y[tr].max(0))  # a little headroom over the brightest target
     with torch.no_grad():
         model.out.bias.copy_(torch.log(torch.from_numpy(np.maximum(Y[tr].mean(0), 1e-4))))
     _fit(model, model.mlp_parameters(), TV, B, R, Yt, np.flatnonzero(tr), epochs, batch, lr, seed,
-         extra_groups=[{"params": [model.latents], "lr": lr * 3}])
+         extra_groups=[{"params": [model.latents], "lr": lr * 3}])  # each latent sees few samples: faster lr
     return model, mean, std, _val_err(model, TV, B, R, Yt, va)
 
 
@@ -120,7 +128,7 @@ def finetune_quantized(model, npz_path, F, mean, std, epochs=5, batch=8192, lr=1
         model.latents.copy_(torch.from_numpy(lo + (hi - lo) * q.astype(np.float32) / 255))
     model.latents.requires_grad_(False)
     d, raw, Y, tv = _load(npz_path, F)
-    tr, va = _split(d["view_id"])
+    tr, va = split_views(d["view_id"])
     TV, B, R, Yt = _tensors(raw, mean, std, Y, tv, d)
     _fit(model, model.mlp_parameters(), TV, B, R, Yt, np.flatnonzero(tr), epochs, batch, lr, seed)
     return q, lo, hi, _val_err(model, TV, B, R, Yt, va)
@@ -129,8 +137,9 @@ def finetune_quantized(model, npz_path, F, mean, std, epochs=5, batch=8192, lr=1
 def export(model, in_mean, in_std, lo, hi, json_path, bin_path):
     q = np.round((model.latents.detach().numpy() - lo) / (hi - lo) * 255).clip(0, 255).astype(np.uint8)
     layers = list(model.hidden) + [model.out]
-    w = dict(width=model.out.in_features, latent_dim=int(q.shape[1]), latent_lo=np.asarray(lo).tolist(),
-             latent_hi=np.asarray(hi).tolist(), out_log_cap=model.log_cap.tolist(), in_mean=np.asarray(in_mean).tolist(), in_std=np.asarray(in_std).tolist(),
+    w = dict(width=model.out.in_features, latent_dim=int(q.shape[1]),
+             latent_lo=np.asarray(lo).tolist(), latent_hi=np.asarray(hi).tolist(), out_log_cap=model.log_cap.tolist(),
+             in_mean=np.asarray(in_mean).tolist(), in_std=np.asarray(in_std).tolist(),
              layers=[dict(W=l.weight.detach().numpy().tolist(), b=l.bias.detach().numpy().tolist()) for l in layers])
     Path(json_path).write_text(json.dumps(w))
     Path(bin_path).write_bytes(q.tobytes())
@@ -150,7 +159,7 @@ def forward_numpy(weights: dict, q_latents, tri_verts, bary, raw) -> np.ndarray:
 def selftest_samples(d, n, seed=1):
     """Validation samples whose third barycentric is >= 0.2: the GPU selftest draws one small
     triangle per sample and needs b2 away from 0."""
-    _, va = _split(d["view_id"])
+    _, va = split_views(d["view_id"])
     ok = np.flatnonzero(va & (d["bary"][:, 2] >= 0.2))
     return np.random.default_rng(seed).choice(ok, n, replace=False)
 

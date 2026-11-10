@@ -48,8 +48,8 @@ qui portent l'information de forme. Erreur de validation à l'entraînement : 0,
 
 | appareil | classique | neural 16 | neural 32 | neural 64 |
 |---|---|---|---|---|
-| PC (à remplir) | | | | |
-| Pixel 6a (à remplir) | | | | |
+| PC portable (GPU intégré) | 25 ms (40 fps) | 29 ms (34 fps) | 41 ms (24 fps) | 92 ms (11 fps) |
+| Pixel 6a | 26 ms (38 fps) | 34 ms (29 fps) | 61 ms (16 fps) | 316 ms (3 fps) |
 
 Deux colonnes par cellule dans la page : shading seul (1024²) et image complète (avec halo).
 Auto-test GPU (`selftest.html`) : PASS 32/32 pour 16, 32 et 64 en Chromium/SwiftShader (écart max

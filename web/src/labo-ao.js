@@ -8,39 +8,20 @@ import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 import Stats from "three/addons/libs/stats.module.js";
 import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
 import { benchFrame } from "./bench.js";
-import { orbitLimits, viewDir } from "./refs.js";
+import { makeNetTexture } from "./materials.js";
+import { layerGlsl, NET_GLSL, packWeights } from "./mlp.js";
+import { nearestRefView, orbitLimits, viewDir } from "./refs.js";
 
-const TEXW = 256;
+const CHECK_PX = 512; // size of the precomputed comparison images
+const getBlob = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p}: ${r.status}`); return r.blob(); });
 
-// layers [{W:[out][in], b}] -> vec4 texture, each row padded to a multiple of 4
-export function packNet(layers) {
-  const vecs = [], layout = [];
-  const push = (arr) => { const s = vecs.length; for (let i = 0; i < arr.length; i += 4) vecs.push([arr[i] ?? 0, arr[i + 1] ?? 0, arr[i + 2] ?? 0, arr[i + 3] ?? 0]); return s; };
-  for (const l of layers) {
-    const din = l.W[0].length, w = vecs.length;
-    l.W.forEach((row) => push(row));
-    layout.push({ w, b: push(l.b), dinV: Math.ceil(din / 4), dout: l.b.length });
-  }
-  const height = Math.ceil(vecs.length / TEXW), data = new Float32Array(height * TEXW * 4);
-  vecs.forEach((v, i) => data.set(v, i * 4));
-  return { data, width: TEXW, height, layout };
-}
+// AO network: plain ReLU hidden layers, sigmoid output. Same weight texture as the jade (mlp.js).
+const aoNet = (net) => ({ in_mean: [], in_std: [], out_log_cap: [], layers: net.layers });
 
 function netGlsl(layout) {
-  const hidden = layout.slice(0, -1).map((l, k) => `
-  vec4 h${k + 1}[${l.dout / 4}];
-  for (int v = 0; v < ${l.dout / 4}; v++) h${k + 1}[v] = vec4(0.0);
-  for (int j = 0; j < ${l.dout}; j++) {
-    float s = comp(netv(${l.b} + j / 4), j);
-    for (int v = 0; v < ${l.dinV}; v++) s += dot(netv(${l.w} + j * ${l.dinV} + v), h${k}[v]);
-    h${k + 1}[j / 4] += lane(j) * max(s, 0.0);
-  }`).join("");
+  const hidden = layout.slice(0, -1).map((l, k) => layerGlsl(l, k, "relu")).join("");
   const o = layout.at(-1), last = layout.length - 1;
-  return `
-uniform highp sampler2D uNet;
-vec4 netv(int i) { return texelFetch(uNet, ivec2(i % ${TEXW}, i / ${TEXW}), 0); }
-vec4 lane(int j) { return vec4(equal(ivec4(0, 1, 2, 3), ivec4(j % 4))); }
-float comp(vec4 v, int j) { return dot(v, lane(j)); }
+  return `${NET_GLSL}
 float neuralAO(vec4 h0[${layout[0].dinV}]) {${hidden}
   float s = comp(netv(${o.b}), 0);
   for (int v = 0; v < ${o.dinV}; v++) s += dot(netv(${o.w} + v), h${last}[v]);
@@ -49,13 +30,15 @@ float neuralAO(vec4 h0[${layout[0].dinV}]) {${hidden}
 }
 
 function aoMaterial(net, mode, uniforms) {
-  const K = net.K, packed = packNet(net.layers);
-  const tex = new THREE.DataTexture(packed.data, packed.width, packed.height, THREE.RGBAFormat, THREE.FloatType);
-  tex.minFilter = tex.magFilter = THREE.NearestFilter;
-  tex.needsUpdate = true;
-  const pat = net.pattern.map(([x, y]) => `vec2(${x.toFixed(7)}, ${y.toFixed(7)})`).join(", ");
+  const K = net.K, neural = mode === "neural";
+  const own = {
+    uS: { value: net.classic.s }, uBias: { value: net.classic.bias },
+    // a uniform, not a const vec2[K](...) array: Mali (Pixel 6a) rejects array constructors
+    uPat: { value: net.pattern.map(([x, y]) => new THREE.Vector2(x, y)) },
+  };
+  if (neural) own.uNet = { value: makeNetTexture(aoNet(net)) };
   return new THREE.ShaderMaterial({
-    uniforms: { ...uniforms, uNet: { value: tex }, uS: { value: net.classic.s }, uBias: { value: net.classic.bias } },
+    uniforms: { ...uniforms, ...own },
     defines: mode === "neural" ? { NEURAL: "" } : {},
     vertexShader: "void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }",
     fragmentShader: /* glsl */ `
@@ -64,8 +47,8 @@ precision highp sampler2D;
 uniform sampler2D tPos, tNrm;
 uniform vec3 uEye, uFwd;
 uniform float uFocal, uR, uS, uBias;
-${mode === "neural" ? netGlsl(packed.layout) : ""}
-const vec2 PAT[${K}] = vec2[${K}](${pat});
+uniform vec2 uPat[${K}];
+${neural ? netGlsl(packWeights(aoNet(net)).layout.layers) : ""}
 void main() {
   ivec2 size = textureSize(tPos, 0), ip = ivec2(gl_FragCoord.xy);
   vec4 P = texelFetch(tPos, ip, 0);
@@ -80,7 +63,7 @@ void main() {
   float acc = 0.0;
 #endif
   for (int k = 0; k < ${K}; k++) {
-    vec2 pk = PAT[k];
+    vec2 pk = uPat[k];
     vec2 o = vec2(ca * pk.x - sa * pk.y, sa * pk.x + ca * pk.y) * rad;
     ivec2 sp = clamp(ip + ivec2(int(round(o.x)), -int(round(o.y))), ivec2(0), size - 1);  // numpy rows go down
     vec4 Q = texelFetch(tPos, sp, 0);
@@ -287,23 +270,26 @@ void main() {
     stats.update();
   });
 
+  // Console tools (?debug -> window.labo.ao): check, measure, benchMethods, setGtaoParams. They leave the
+  // canvas at CHECK_PX: the caller resizes it back (labo.js does after a check).
+
   // parity check against the spike's own images: full-res neural AO at each reference pose
   async function check() {
     running = false;
     const saved = { ...state }, savedScale = aoScale;
-    resize(512, 1); aoScale = 1; allocate();
+    resize(CHECK_PX, 1); aoScale = 1; allocate();
     Object.assign(state, { left: "neural", right: "neural" });
     const out = [];
     for (let i = 0; i < net.views.length; i++) {
       setPose(i, false); render();
-      const px = new Uint8Array(512 * 512 * 4);
-      renderer.setRenderTarget(rtAo); renderer.readRenderTargetPixels(rtAo, 0, 0, 512, 512, px); renderer.setRenderTarget(null);
-      const bmp = await createImageBitmap(await (await fetch(`data/labo/ao/view${i}-neural.jpg`)).blob());
-      const c = new OffscreenCanvas(512, 512).getContext("2d"); c.drawImage(bmp, 0, 0);
-      const ref = c.getImageData(0, 0, 512, 512).data;
+      const px = new Uint8Array(CHECK_PX * CHECK_PX * 4);
+      renderer.setRenderTarget(rtAo); renderer.readRenderTargetPixels(rtAo, 0, 0, CHECK_PX, CHECK_PX, px); renderer.setRenderTarget(null);
+      const bmp = await createImageBitmap(await getBlob(`data/labo/ao/view${i}-neural.jpg`));
+      const c = new OffscreenCanvas(CHECK_PX, CHECK_PX).getContext("2d"); c.drawImage(bmp, 0, 0);
+      const ref = c.getImageData(0, 0, CHECK_PX, CHECK_PX).data;
       let sum = 0, n = 0, bad = 0;
-      for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
-        const a = px[((511 - y) * 512 + x) * 4] / 255, b = ref[(y * 512 + x) * 4] / 255;  // GL rows bottom-up
+      for (let y = 0; y < CHECK_PX; y++) for (let x = 0; x < CHECK_PX; x++) {
+        const a = px[((CHECK_PX - 1 - y) * CHECK_PX + x) * 4] / 255, b = ref[(y * CHECK_PX + x) * 4] / 255;  // GL rows bottom-up
         if (b > 0.995 && a > 0.995) continue;
         const e = Math.abs(a - b); sum += e; n++; if (e > 0.1) bad++;
       }
@@ -319,16 +305,16 @@ void main() {
   const gtPixels = [];
   async function gtImage(i) {
     if (!gtPixels[i]) {
-      const bmp = await createImageBitmap(await (await fetch(`data/labo/ao/view${i}-gt.jpg`)).blob());
-      const c = new OffscreenCanvas(512, 512).getContext("2d"); c.drawImage(bmp, 0, 0);
-      gtPixels[i] = c.getImageData(0, 0, 512, 512).data;
+      const bmp = await createImageBitmap(await getBlob(`data/labo/ao/view${i}-gt.jpg`));
+      const c = new OffscreenCanvas(CHECK_PX, CHECK_PX).getContext("2d"); c.drawImage(bmp, 0, 0);
+      gtPixels[i] = c.getImageData(0, 0, CHECK_PX, CHECK_PX).data;
     }
     return gtPixels[i];
   }
   async function measure(methods = ["classic", "neural", "gtao"]) {
     running = false;
     const saved = { ...state }, savedScale = aoScale;
-    resize(512, 1); aoScale = 1; allocate();
+    resize(CHECK_PX, 1); aoScale = 1; allocate();
     const res = methods.map(() => []);
     for (let i = 0; i < net.views.length; i++) {
       setPose(i, false);
@@ -342,13 +328,13 @@ void main() {
           renderer.setRenderTarget(rtBlurA); renderer.render(quadScene, ortho); renderer.setRenderTarget(null);
           rt = rtBlurA;
         }
-        const px = new Uint8Array(512 * 512 * 4);
-        renderer.readRenderTargetPixels(rt, 0, 0, 512, 512, px);
+        const px = new Uint8Array(CHECK_PX * CHECK_PX * 4);
+        renderer.readRenderTargetPixels(rt, 0, 0, CHECK_PX, CHECK_PX, px);
         let sum = 0, n = 0;
-        for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
+        for (let y = 0; y < CHECK_PX; y++) for (let x = 0; x < CHECK_PX; x++) {
           // pixels dark in the reference OR in the method: a halo where the ray tracing is bright counts too
-          const g = gt[(y * 512 + x) * 4] / 255;
-          const a = px[((511 - y) * 512 + x) * 4] / 255;  // GL rows bottom-up
+          const g = gt[(y * CHECK_PX + x) * 4] / 255;
+          const a = px[((CHECK_PX - 1 - y) * CHECK_PX + x) * 4] / 255;  // GL rows bottom-up
           if (g >= 0.9 && a >= 0.9) continue;
           sum += Math.abs(a - g); n++;
         }
@@ -373,11 +359,6 @@ void main() {
     setAoScale(v) { aoScale = v; allocate(); },
     onMove(fn) { onMove = fn; },
     pause() { running = false; }, resume() { running = true; },
-    nearestPose() {
-      const d = camera.position.clone().sub(target).normalize();
-      let best = 0, bd = -2;
-      net.views.forEach((v, i) => { const dot = d.dot(new THREE.Vector3(...viewDir(v))); if (dot > bd) { bd = dot; best = i; } });
-      return best;
-    },
+    nearestPose: () => nearestRefView(camera.position.clone().sub(target).normalize().toArray(), net.views),
   };
 }

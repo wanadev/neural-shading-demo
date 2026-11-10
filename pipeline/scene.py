@@ -10,7 +10,7 @@ import mitsuba as mi
 
 try:
     mi.set_variant("llvm_ad_rgb")
-except Exception:  # ponytail: scalar fallback is ~10x slower, only for machines without LLVM
+except Exception:  # scalar fallback is ~10x slower: only for machines without LLVM
     mi.set_variant("scalar_rgb")
 
 from pipeline.config import CAMERA, ENV, GROUND, JADE, LAMP, WEB_DATA
@@ -32,7 +32,7 @@ def lamp_position(az_deg, el_deg) -> np.ndarray:
     return np.array(LAMP["center"]) + LAMP["radius"] * _dir(az_deg, el_deg)
 
 
-def _sensor(view, res, rgba=False):
+def sensor(view, res, rgba=False):
     T = mi.ScalarTransform4f
     return dict(type="perspective", fov=CAMERA["fov_y"], fov_axis="y",
                 to_world=T().look_at(origin=camera_origin(view).tolist(), target=list(CAMERA["target"]), up=[0, 1, 0]),
@@ -48,7 +48,7 @@ def _scene(view, lamp, res, *, env, lamp_on, coat=False, rgba=False, ground=True
     else:
         bsdf = dict(type="null")
         medium = dict(type="homogeneous", sigma_t=JADE["sigma_t"], albedo=dict(type="rgb", value=list(JADE["albedo"])))
-    d = {"type": "scene", "sensor": _sensor(view, res, rgba),
+    d = {"type": "scene", "sensor": sensor(view, res, rgba),
          "dragon": dict(type="ply", filename=str(WEB_DATA / "dragon.ply"), face_normals=False, bsdf=bsdf, interior=medium)}
     if dragon_only:
         return mi.load_dict(d)

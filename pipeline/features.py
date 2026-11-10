@@ -3,14 +3,14 @@ FEATURES_GLSL in web/src/glsl.js."""
 import numpy as np
 
 
-def _unit(v):
+def unit(v):
     return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)
 
 
 def raw_features(nrm, pos, cam, lamp) -> np.ndarray:
     """nrm(3) | view = normalize(cam - pos)(3) | L = normalize(lamp - pos)(3) | dist(1) | dot(nrm, L)(1)"""
     nrm, pos = np.asarray(nrm, np.float64), np.asarray(pos, np.float64)
-    view = _unit(np.asarray(cam, np.float64) - pos)
+    view = unit(np.asarray(cam, np.float64) - pos)
     to_l = np.asarray(lamp, np.float64) - pos
     dist = np.linalg.norm(to_l, axis=-1, keepdims=True)
     L = to_l / np.maximum(dist, 1e-12)

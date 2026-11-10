@@ -10,6 +10,7 @@ direction, where the light finally leaves the object and how much of it gets thr
   traced  : the exact dominant path (upper bound of the neural approach)
   mitsuba : full path-traced reference (all paths, internal reflections split)
 python -m spikes.glass.glass_spike   (from the repo root)"""
+import json
 import time
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import numpy as np
 import mitsuba as mi
 import torch
 
-from pipeline.scene import ENV_ROT_Y_DEG, _sensor  # sets the llvm variant
+from pipeline.scene import ENV_ROT_Y_DEG, sensor  # sets the llvm variant
 from pipeline.config import CAMERA, ENV, WEB_DATA
 from pipeline.env import read_hdr
 from pipeline.features import barycentric
@@ -115,7 +116,7 @@ class EnvMap:
 
 def view_buffers(view, res):
     """G-buffer of the dragon + the exact camera ray of every pixel."""
-    sc = mi.load_dict({"type": "scene", "sensor": _sensor(view, res),
+    sc = mi.load_dict({"type": "scene", "sensor": sensor(view, res),
                        "m": dict(type="ply", filename=str(WEB_DATA / "dragon.ply"), face_normals=False)})
     aov = mi.load_dict(dict(type="aov", aovs="pos:position,nn:sh_normal,pi:prim_index,dd:depth"))
     a = np.array(mi.render(sc, integrator=aov, spp=1), dtype=np.float32)
@@ -155,7 +156,7 @@ class NeuralGlass(torch.nn.Module):
 
 def mitsuba_reference(view, res, spp=256):
     T = mi.ScalarTransform4f
-    sc = mi.load_dict({"type": "scene", "sensor": _sensor(view, res),
+    sc = mi.load_dict({"type": "scene", "sensor": sensor(view, res),
                        "m": dict(type="ply", filename=str(WEB_DATA / "dragon.ply"), face_normals=False,
                                  bsdf=dict(type="dielectric", int_ior=IOR, ext_ior=1.0)),
                        "env": dict(type="envmap", filename=str(ENV_FILE), scale=ENV["scale"] * 4,
@@ -182,7 +183,7 @@ def main():
     opt = torch.optim.Adam([{"params": model.mlp.parameters(), "lr": 3e-3}, {"params": [model.latents], "lr": 1e-2}])
     g = torch.Generator().manual_seed(0)
     t0 = time.time()
-    for step in range(8000):
+    for _ in range(8000):
         b = torch.randint(0, len(ok), (8192,), generator=g)
         pe, pT = model(tv[b], bary[b], n_[b], d_[b])
         dir_loss = ((1 - (pe * e_[b]).sum(1)) * okt[b]).mean()
@@ -192,7 +193,6 @@ def main():
     # uint8 latents as in the jade, and the test images below use them too: the live shader gets the same values
     q, lo, hi = quantize(model.latents)
     model.latents.data = torch.from_numpy(lo + (hi - lo) * q.astype(np.float32) / 255)
-    import json
     LABO.mkdir(parents=True, exist_ok=True)
     (LABO.parent / "glass_latents.bin").write_bytes(q.tobytes())
     (LABO.parent / "glass_net.json").write_text(json.dumps(dict(
@@ -200,12 +200,12 @@ def main():
         layers=[dict(W=l.weight.detach().numpy().tolist(), b=l.bias.detach().numpy().tolist())
                 for l in model.mlp if isinstance(l, torch.nn.Linear)])))
 
-    rows, errs = [], {"classic": [], "neural": [], "traced": []}
-    LABO.mkdir(parents=True, exist_ok=True)
+    rows, views, errs = [], [], {"classic": [], "neural": [], "traced": []}
     save = lambda img, key, i: mi.Bitmap(np.ascontiguousarray(to_srgb8(aces_filmic(img, EXPOSURE)))).write(str(LABO / f"view{i}-{key}.jpg"))
     rng = np.random.default_rng(11)
     for i in range(N_TEST):
         view = random_view(rng)
+        views.append(view)
         s = samples(view, RES_TEST, msc, V, F)
         ref = mitsuba_reference(view, RES_TEST)
         hit, dirs = s["hit"], s["dirs"]
@@ -236,9 +236,8 @@ def main():
     print("mean relative error vs Mitsuba on glass pixels: " + "  ".join(f"{k} {np.mean(v):.3f}" for k, v in errs.items()))
     mi.Bitmap(np.concatenate(rows, 0)).write(str(OUT / "glass_compare.png"))
     print("wrote", OUT / "glass_compare.png", "(columns: classic | neural | traced | Mitsuba)")
-    import json
-    rng = np.random.default_rng(11)  # the test views above, for the real-time page
-    (LABO.parent / "glass_views.json").write_text(json.dumps([{k: float(v) for k, v in random_view(rng).items()} for _ in range(N_TEST)]))
+    views = [{k: float(v) for k, v in w.items()} for w in views]  # the test views above, for the real-time page
+    (LABO.parent / "glass_views.json").write_text(json.dumps(views))
     (LABO.parent / "glass.json").write_text(json.dumps(dict(
         views=[dict(errors={k: round(float(v[i]), 4) for k, v in errs.items()}) for i in range(N_TEST)],
         mean={k: round(float(np.mean(v)), 4) for k, v in errs.items()}), indent=1))

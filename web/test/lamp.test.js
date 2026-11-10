@@ -11,7 +11,7 @@ test("lampPosition matches python convention", () => {
   [c[0] + r, c[1], c[2]].forEach((v, i) => assert.ok(Math.abs(p[i] - v) < 1e-12));
 });
 
-test("clampLamp keeps the lamp in the training domain", () => { // Review Focus #1
+test("clampLamp keeps the lamp in the training domain", () => {
   assert.equal(clampLamp({ az_deg: 370, el_deg: 95 }, cfg).el_deg, cfg.lamp.elevation_deg[1]);
   assert.equal(clampLamp({ az_deg: -30, el_deg: -40 }, cfg).el_deg, cfg.lamp.elevation_deg[0]);
   assert.equal(clampLamp({ az_deg: 370, el_deg: 0 }, cfg).az_deg, 10);

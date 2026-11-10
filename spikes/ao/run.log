@@ -1,6 +1,0 @@
-data 87s: train 3807861 px, test 877340 px
-MAE all px   classic 0.0326  neural 0.0225
-MAE occluded classic 0.1605  neural 0.0817  (17.5% of px)
-classic params s=6.009 bias=0.094
-wrote /home/clevasseur/dev/test/neural-shader/spikes/ao/out/ao_compare.png
-labo export -> /home/clevasseur/dev/test/neural-shader/web/data/labo/ao

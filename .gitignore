@@ -3,3 +3,4 @@ pipeline/out/
 .superpowers/
 __pycache__/
 *.pyc
+spikes/*/run.*

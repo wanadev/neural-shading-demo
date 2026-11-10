@@ -11,38 +11,27 @@ import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
 import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
 import Stats from "three/addons/libs/stats.module.js";
 import { BVHShaderGLSL, FloatVertexAttributeTexture, MeshBVH, MeshBVHUniformStruct } from "three-mesh-bvh";
-import { packWeights } from "./mlp.js";
+import { layerGlsl, NET_GLSL, packWeights } from "./mlp.js";
+import { makeNetTexture } from "./materials.js";
 import { benchFrame } from "./bench.js";
-import { orbitLimits, viewDir } from "./refs.js";
+import { nearestRefView, orbitLimits, viewDir } from "./refs.js";
 
 const IOR = 1.5, ENV_BOOST = 4;  // same as the spike
-const get = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p} : HTTP ${r.status}`); return r; });
+const get = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p}: ${r.status}`); return r; });
 
 // The (failed) glass network of the spike: 8 latents + n + d -> 64 -> 64 -> exit direction, transmittance.
 // Plain ReLU, unlike the jade. Weights in a float texture, same packing as the jade (mlp.js).
 function netGlsl(layout) {
   const L = layout.layers;
-  const layer = (l, k, act) => `
-  vec4 h${k + 1}[${Math.ceil(l.dout / 4)}];
-  for (int v = 0; v < ${Math.ceil(l.dout / 4)}; v++) h${k + 1}[v] = vec4(0.0);
-  for (int j = 0; j < ${l.dout}; j++) {
-    float s = comp(netv(${l.b} + j / 4), j);
-    for (int v = 0; v < ${l.dinV}; v++) s += dot(netv(${l.w} + j * ${l.dinV} + v), h${k}[v]);
-    h${k + 1}[j / 4] += lane(j) * ${act ? "max(s, 0.0)" : "s"};
-  }`;
-  return `
-uniform highp sampler2D uNet;
+  return `${NET_GLSL}
 uniform vec4 uLatLo[2], uLatHi[2];
 varying vec4 vLat0, vLat1;
-vec4 netv(int i) { return texelFetch(uNet, ivec2(i % 256, i / 256), 0); }
-vec4 lane(int j) { return vec4(equal(ivec4(0, 1, 2, 3), ivec4(j % 4))); }
-float comp(vec4 v, int j) { return dot(v, lane(j)); }
 void glassNet(vec3 n, vec3 d, out vec3 dir, out float T) {
   vec4 h0[4];
   h0[0] = uLatLo[0] + (uLatHi[0] - uLatLo[0]) * vLat0;
   h0[1] = uLatLo[1] + (uLatHi[1] - uLatLo[1]) * vLat1;
   h0[2] = vec4(n, d.x); h0[3] = vec4(d.yz, 0.0, 0.0);
-${L.map((l, k) => layer(l, k, k < L.length - 1)).join("")}
+${L.map((l, k) => layerGlsl(l, k, k < L.length - 1 ? "relu" : "linear")).join("")}
   vec4 o = h${L.length}[0];
   dir = normalize(o.xyz); T = 1.0 / (1.0 + exp(-o.w));
 }`;
@@ -123,7 +112,6 @@ void main() {
 export async function createGlass({ canvas, views, cfg }) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
   renderer.autoClear = false;
   const [geometry, envSH, netW, lat] = await Promise.all([new PLYLoader().loadAsync("data/dragon.ply"),
     get("data/env_sh.json").then((r) => r.json()), get("data/labo/glass_net.json").then((r) => r.json()),
@@ -135,9 +123,9 @@ export async function createGlass({ canvas, views, cfg }) {
     for (let i = 0; i < nv; i++) a.set(lat.subarray(i * 8 + k * 4, i * 8 + k * 4 + 4), i * 4);
     geometry.setAttribute(`lat${k}`, new THREE.Uint8BufferAttribute(a, 4, true));
   }
-  const packed = packWeights({ ...netW, in_mean: [], in_std: [], out_log_cap: [] });
-  const netTex = new THREE.DataTexture(packed.data, packed.width, packed.height, THREE.RGBAFormat, THREE.FloatType);
-  netTex.needsUpdate = true;
+  const glassNet = { ...netW, in_mean: [], in_std: [], out_log_cap: [] };
+  const packed = packWeights(glassNet);
+  const netTex = makeNetTexture(glassNet); // nearest filtering: a linear float texture is incomplete without OES_texture_float_linear
   const v4 = (a, k) => new THREE.Vector4(...a.slice(k * 4, k * 4 + 4));
   const net = { tex: netTex, layout: packed.layout, lo: [v4(netW.latent_lo, 0), v4(netW.latent_lo, 1)], hi: [v4(netW.latent_hi, 0), v4(netW.latent_hi, 1)] };
   const hdr = await new HDRLoader().loadAsync(`data/${envSH.file}`);
@@ -184,7 +172,11 @@ export async function createGlass({ canvas, views, cfg }) {
       renderer.clear();
       const m = state[side];
       if (mats[m]) { dragon.material = mats[m]; renderer.render(scene, camera); }
-      else { imgMat.map = imgTex(m, state.view); imgMat.needsUpdate = true; renderer.render(imgScene, ortho); }
+      else {
+        const t = imgTex(m, state.view);
+        if (imgMat.map !== t) { imgMat.map = t; imgMat.needsUpdate = true; }
+        renderer.render(imgScene, ortho);
+      }
     }
     renderer.setScissorTest(false);
   }
@@ -224,7 +216,7 @@ export async function createGlass({ canvas, views, cfg }) {
       render();
       const gl = renderer.getContext(), px = new Uint8Array(512 * 512 * 4);
       gl.readPixels(0, 0, 512, 512, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      const bmp = await createImageBitmap(await (await fetch(`data/labo/glass/view${i}-${mode}.jpg`)).blob());
+      const bmp = await createImageBitmap(await (await get(`data/labo/glass/view${i}-${mode}.jpg`)).blob());
       const c = new OffscreenCanvas(512, 512).getContext("2d"); c.drawImage(bmp, 0, 0);
       const ref = c.getImageData(0, 0, 512, 512).data;
       let sum = 0, n = 0;
@@ -250,11 +242,6 @@ export async function createGlass({ canvas, views, cfg }) {
     stats, state, resize, setPose, check, benchMethods,
     pause() { running = false; }, resume() { running = true; },
     onMove(fn) { onMove = fn; },
-    nearestPose() {
-      const d = camera.position.clone().sub(target).normalize();
-      let best = 0, bd = -2;
-      views.forEach((v, i) => { const dot = d.dot(new THREE.Vector3(...viewDir(v))); if (dot > bd) { bd = dot; best = i; } });
-      return best;
-    },
+    nearestPose: () => nearestRefView(camera.position.clone().sub(target).normalize().toArray(), views),
   };
 }

@@ -9,6 +9,15 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 
+import Stats from "three/addons/libs/stats.module.js";
+import { makeGround, makeJadeMaterial, makeLamp, setJadeAttributes } from "./materials.js";
+import { backlight, clampLamp, lampPosition } from "./lamp.js";
+import { leaveRef, nearestRefView, orbitLimits, viewDir, withPose } from "./refs.js";
+import { parseDeepLink, pickPipeline, pipelineSettings, sideMode } from "./policy.js";
+import { costRows } from "./hud.js";
+import { bench, benchFrame } from "./bench.js";
+import { curtainHandle, markOn, setText, showError } from "./ui.js";
+
 // Sensor saturation before bloom: the bulb's radiance (thousands) would otherwise wash the whole
 // frame white. Applied to the composed frame, so both curtain sides get the same treatment.
 const ClampShader = {
@@ -16,13 +25,6 @@ const ClampShader = {
   vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
   fragmentShader: "uniform sampler2D tDiffuse; uniform float uMax; varying vec2 vUv; void main() { vec4 c = texture2D(tDiffuse, vUv); gl_FragColor = vec4(min(c.rgb, vec3(uMax)), c.a); }",
 };
-import { makeGround, makeJadeMaterial, makeLamp, setJadeAttributes } from "./materials.js";
-import { backlight, clampLamp, lampPosition } from "./lamp.js";
-import { leaveRef, nearestRefView, orbitLimits, viewDir, withPose } from "./refs.js";
-import { effectiveWidth, parseDeepLink, pickPipeline, pipelineSettings, sideMode } from "./policy.js";
-import { costRows } from "./hud.js";
-import { bench, benchFrame } from "./bench.js";
-import Stats from "three/addons/libs/stats.module.js";
 
 const $ = (id) => document.getElementById(id);
 const json = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`${p}: ${r.status}`); return r.json(); });
@@ -34,7 +36,7 @@ const RAD = 180 / Math.PI;
 try {
   await main();
 } catch (e) {
-  document.body.insertAdjacentHTML("afterbegin", `<div id="err">Erreur : ${e.message}</div>`);
+  showError(e);
   throw e;
 }
 
@@ -84,24 +86,24 @@ async function main() {
 
   const mats = { classic: makeJadeMaterial({ mode: "classic", classic, cfg, shared, envMap }) };
   const latents = {};
-  const loaded = new Set();
-  async function loadWidth(w) {
-    if (loaded.has(w)) return;
+  const loading = {};
+  const loadWidth = (w) => (loading[w] ??= (async () => {
     const [weights, lat] = await Promise.all([json(`data/weights_${w}.json`), bytes(`data/latents_${w}.bin`)]);
     mats[`n${w}`] = makeJadeMaterial({ mode: "neural", weights, cfg, shared, envMap });
     latents[w] = lat;
-    loaded.add(w);
-  }
+  })().catch((e) => { delete loading[w]; throw e; })); // a failed download can be retried
 
   // reference side: blurred room behind the Mitsuba image (alpha = geometry)
   const bgScene = new THREE.Scene();
   setBackground(bgScene);
-  const refMat = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, toneMapped: settings.refToneMapped });
+  const refMat = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false });
   const refScene = new THREE.Scene();
   refScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), refMat));
   const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const refTex = {};
-  const loadRef = (i) => (refTex[i] ??= new EXRLoader().loadAsync(`data/refs/view${i}.exr`).then((t) => { refTex[i] = t; return t; }));
+  const loadRef = (i) => (refTex[i] ??= new EXRLoader().loadAsync(`data/refs/view${i}.exr`)
+    .then((t) => { refTex[i] = t; return t; })
+    .catch((e) => { delete refTex[i]; showError(e); })); // a failed download can be retried
 
   // --- state ------------------------------------------------------------------------------------
   const state = { split: 0.5, sides: { left: "classic", right: "neural" }, width: 16, wantWidth: 16,  // 16: same quality as 32 at a quarter of the cost
@@ -109,7 +111,8 @@ async function main() {
                   refIdx: null, move: "camera" };
   let size = 0, tween = null, benching = false;
   await loadWidth(16);
-  setJadeAttributes(geometry, latents[16], thickness);
+  geometry.setAttribute("thick", new THREE.BufferAttribute(thickness, 1, true));
+  setJadeAttributes(geometry, latents[16]);
 
   function setLamp(l) {
     state.lamp = clampLamp(l, cfg);
@@ -121,13 +124,14 @@ async function main() {
   setLamp(state.lamp);
 
   function setWidth(w) {
+    if (benching) return;
     state.wantWidth = w;
     loadWidth(w).then(() => {
-      if (state.wantWidth !== w) return;
-      state.width = effectiveWidth(w, loaded, state.width);
-      setJadeAttributes(geometry, latents[state.width], thickness);
+      if (state.wantWidth !== w || benching) return; // a later click, or a measurement, took over
+      state.width = w;
+      setJadeAttributes(geometry, latents[w]);
       markWidth();
-    });
+    }, showError);
   }
 
   const camAz = () => { const d = camera.position.clone().sub(target); return Math.atan2(d.x, d.z) * RAD; };
@@ -141,10 +145,11 @@ async function main() {
     $(side).onclick = (e) => { if (e.target.dataset.mode) setSide(side, e.target.dataset.mode); };
   }
   const markSides = () => {
-    for (const side of ["left", "right"]) $(side).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.mode === state.sides[side]));
+    for (const side of ["left", "right"]) $(side).querySelectorAll("button").forEach((b) => markOn(b, b.dataset.mode === state.sides[side]));
   };
   markSides();
   function setSide(side, mode) {
+    if (benching) return;
     state.sides[side] = mode;
     markSides();
     if (mode === "ref") {
@@ -191,32 +196,18 @@ async function main() {
   const endLampDrag = () => { lampDrag = null; };
   canvas.addEventListener("pointerup", endLampDrag);
   canvas.addEventListener("pointercancel", endLampDrag);
-  const markMove = () => { $("moveCam").classList.toggle("on", state.move === "camera"); $("moveLamp").classList.toggle("on", state.move === "lamp"); };
+  const markMove = () => { markOn($("moveCam"), state.move === "camera"); markOn($("moveLamp"), state.move === "lamp"); };
   $("moveCam").onclick = () => { state.move = "camera"; controls.enabled = true; markMove(); };
   $("moveLamp").onclick = () => { state.move = "lamp"; controls.enabled = false; markMove(); };
   $("backlight").onclick = () => { setLamp(backlight(camAz())); leaveReference(); };
 
   $("widths").innerHTML = cfg.widths.map((w) => `<button data-w="${w}">${w}</button>`).join("");
-  const markWidth = () => $("widths").querySelectorAll("button").forEach((b) => b.classList.toggle("on", +b.dataset.w === state.width));
+  const markWidth = () => $("widths").querySelectorAll("button").forEach((b) => markOn(b, +b.dataset.w === state.width));
   $("widths").onclick = (e) => { if (e.target.dataset.w) setWidth(+e.target.dataset.w); };
   markWidth();
+  markMove();
 
-  // curtain handle
-  const handle = $("handle");
-  let dragging = false;
-  handle.addEventListener("pointerdown", (e) => { dragging = true; handle.setPointerCapture(e.pointerId); e.stopPropagation(); });
-  handle.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    const r = $("stage").getBoundingClientRect();
-    state.split = THREE.MathUtils.clamp((e.clientX - r.left) / r.width, 0, 1);
-    placeSplit();
-  });
-  handle.addEventListener("pointerup", () => { dragging = false; });
-  handle.addEventListener("pointercancel", () => { dragging = false; });
-  function placeSplit() {
-    handle.style.left = `${state.split * 100}%`;
-    $("stage").style.setProperty("--split", `${state.split * 100}%`);
-  }
+  const placeSplit = curtainHandle($("handle"), $("stage"), () => state.split, (s) => { state.split = s; });
   placeSplit();
 
   // --- rendering --------------------------------------------------------------------------------
@@ -236,8 +227,8 @@ async function main() {
     renderer.clear();
     const mode = shownMode(side);
     if (mode === "ref") {
-      refMat.map = refTex[state.refIdx];
-      refMat.needsUpdate = true;
+      const t = refTex[state.refIdx];
+      if (refMat.map !== t) { refMat.map = t; refMat.needsUpdate = true; }
       renderer.render(bgScene, camera);
       renderer.render(refScene, ortho);
     } else {
@@ -306,8 +297,8 @@ async function main() {
     }
     drawFrame();
     stats.update();
-    $("tagL").textContent = label("left");
-    $("tagR").textContent = label("right");
+    setText($("tagL"), label("left"));
+    setText($("tagR"), label("right"));
   });
 
   const costLabels = ["Classique", ...cfg.widths.map((w) => `Neural ${w}`)];
@@ -333,7 +324,7 @@ async function main() {
         const techniques = [["Classique", "classic", null], ...cfg.widths.map((w) => [`Neural ${w}`, "neural", w])];
         for (const [name, mode, w] of techniques) {
           out.textContent = `mesure : ${name}…`;
-          if (w) { await loadWidth(w); state.width = w; setJadeAttributes(geometry, latents[w], thickness); }
+          if (w) { await loadWidth(w); state.width = w; setJadeAttributes(geometry, latents[w]); }
           dragon.material = mode === "classic" ? mats.classic : mats[`n${w}`];
           const shade = await bench(renderer, () => { renderer.clear(); renderer.render(scene, camera); });
           state.sides = { left: mode, right: mode };
@@ -344,8 +335,10 @@ async function main() {
     } finally {
       state.sides = saved.sides;
       state.width = saved.width;
-      setJadeAttributes(geometry, latents[state.width], thickness);
+      setJadeAttributes(geometry, latents[state.width]);
       setLamp(saved.lamp);
+      markSides();
+      markWidth();
       benching = false;
       btn.disabled = false;
     }

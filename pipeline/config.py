@@ -18,6 +18,7 @@ REF_POSES = [dict(az_deg=30, el_deg=15, radius=0.5, lamp_az_deg=60, lamp_el_deg=
              dict(az_deg=120, el_deg=10, radius=0.5, lamp_az_deg=300, lamp_el_deg=20),   # backlit
              dict(az_deg=220, el_deg=30, radius=0.5, lamp_az_deg=170, lamp_el_deg=50),
              dict(az_deg=300, el_deg=5, radius=0.5, lamp_az_deg=120, lamp_el_deg=15)]    # backlit
+BACKLIT = (1, 3)  # REF_POSES indices with the lamp behind the dragon
 WIDTHS = (16, 32, 64)
 LATENT_DIM = 8
 

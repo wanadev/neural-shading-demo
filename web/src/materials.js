@@ -71,17 +71,16 @@ ${neural
   return m;
 }
 
-// Per-vertex data for the jade: 8 latents as two normalized uint8 vec4 attributes + thickness.
-export function setJadeAttributes(geometry, latents, thickness) {
+// Per-vertex latents for the jade: 8 uint8 values as two normalized vec4 attributes. Switching
+// width rewrites the same buffers in place instead of allocating new GL buffers each time.
+export function setJadeAttributes(geometry, latents) {
   const n = geometry.attributes.position.count;
-  const a = new Uint8Array(n * 4), b = new Uint8Array(n * 4);
-  for (let i = 0; i < n; i++) {
-    a.set(latents.subarray(i * 8, i * 8 + 4), i * 4);
-    b.set(latents.subarray(i * 8 + 4, i * 8 + 8), i * 4);
+  for (const [name, offset] of [["latA", 0], ["latB", 4]]) {
+    let attr = geometry.getAttribute(name);
+    if (!attr) geometry.setAttribute(name, (attr = new THREE.BufferAttribute(new Uint8Array(n * 4), 4, true)));
+    for (let i = 0; i < n; i++) attr.array.set(latents.subarray(i * 8 + offset, i * 8 + offset + 4), i * 4);
+    attr.needsUpdate = true;
   }
-  geometry.setAttribute("latA", new THREE.BufferAttribute(a, 4, true));
-  geometry.setAttribute("latB", new THREE.BufferAttribute(b, 4, true));
-  if (thickness) geometry.setAttribute("thick", new THREE.BufferAttribute(thickness, 1, true));
 }
 
 export function makeGround(cfg, envMap) {

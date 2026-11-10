@@ -6,6 +6,7 @@ G-buffer (positions + normals) at 16 screen offsets around the pixel.
   classic : Crytek/SAO-style formula, its 2 parameters fitted on the same data (fair baseline)
   neural  : MLP 35 -> 32 -> 32 -> 1
 python -m spikes.ao.ao_spike   (from the repo root)"""
+import json
 import time
 from pathlib import Path
 
@@ -13,9 +14,8 @@ import numpy as np
 import mitsuba as mi
 import torch
 
-from pipeline.scene import _sensor, camera_origin  # sets the llvm variant
+from pipeline.scene import sensor, camera_origin  # sets the llvm variant
 from pipeline.config import CAMERA, GROUND, WEB_DATA
-from pipeline.tonemap import to_srgb8
 
 OUT = Path(__file__).parent / "out"
 R = 0.04          # AO radius, metres
@@ -24,7 +24,7 @@ GT_RAYS = 128
 RES, N_TRAIN, N_TEST = 192, 120, 4
 LABO = WEB_DATA / "labo" / "ao"  # images + metrics for web/labo.html
 
-# fixed sample pattern: Vogel disk, radius in [0.1, 1]
+# fixed sample pattern: Vogel disk (golden angle), radius sqrt((i + 0.5) / K) in [0.18, 0.98]
 _i = np.arange(K)
 PATTERN = np.stack([np.cos(_i * 2.39996), np.sin(_i * 2.39996)], 1) * np.sqrt((_i + 0.5) / K)[:, None]
 
@@ -32,7 +32,7 @@ PATTERN = np.stack([np.cos(_i * 2.39996), np.sin(_i * 2.39996)], 1) * np.sqrt((_
 def scene_for(view, res):
     T = mi.ScalarTransform4f
     half = GROUND["size"] / 2
-    return mi.load_dict({"type": "scene", "sensor": _sensor(view, res),
+    return mi.load_dict({"type": "scene", "sensor": sensor(view, res),
                          "dragon": dict(type="ply", filename=str(WEB_DATA / "dragon.ply"), face_normals=False),
                          "ground": dict(type="rectangle", to_world=T().rotate([1, 0, 0], -90).scale([half, half, 1]))})
 
@@ -104,7 +104,7 @@ def bilateral(img, pos, nrm, hit):
     return img
 
 
-def make_view(i, rng):
+def make_view(rng):
     v = dict(az_deg=rng.uniform(0, 360), el_deg=rng.uniform(*CAMERA["elevation_deg"]), radius=rng.uniform(*CAMERA["radius"]))
     eye = camera_origin(v); fwd = np.array(CAMERA["target"]) - eye; fwd /= np.linalg.norm(fwd)
     return v, eye, fwd
@@ -114,7 +114,7 @@ def dataset(n_views, seed, res):
     rng = np.random.default_rng(seed)
     X, Y, imgs = [], [], []
     for i in range(n_views):
-        v, eye, fwd = make_view(i, rng)
+        v, eye, fwd = make_view(rng)
         sc = scene_for(v, res)
         pos, nrm, hit = gbuffer(sc)
         ao = gt_ao(sc, pos, nrm, hit, rng)
@@ -180,7 +180,6 @@ def main():
     mi.Bitmap(np.concatenate(rows, 0)).write(str(OUT / "ao_compare.png"))
     print("wrote", OUT / "ao_compare.png")
     # labo export: one image per view and method + per-view error on occluded pixels
-    import json
     LABO.mkdir(parents=True, exist_ok=True)
     views, off = [], 0
     for i, (hit, ys, xs, ao, _, pos, nrm) in enumerate(test_imgs):

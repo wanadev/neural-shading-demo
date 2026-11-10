@@ -72,8 +72,8 @@ def main(argv=None):
         t = time.time()
         save_atomic(f, **render_view(i, a.res, a.spp))
         print(f"view {i + 1}/{a.views} {time.time() - t:.1f}s", flush=True)
-    parts = [np.load(shards / f"view_{i:04d}.npz") for i in range(a.views)]
-    save_atomic(out, **{k: np.concatenate([q[k] for q in parts]) for k in parts[0].files})
+    parts = [dict(np.load(shards / f"view_{i:04d}.npz")) for i in range(a.views)]  # dict(): loads and closes
+    save_atomic(out, **{k: np.concatenate([q[k] for q in parts]) for k in parts[0]})
     print("samples", sum(len(q["tri"]) for q in parts), "->", out)
 
 

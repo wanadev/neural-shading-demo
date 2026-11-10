@@ -47,7 +47,7 @@ def test_forward_numpy_matches_torch(tmp_path):
     assert np.allclose(forward_numpy(w, q, tv, bary, raw), ref, rtol=1e-4)
 
 
-def test_export_sizes_match_mesh(tmp_path):  # Review Focus #2
+def test_export_sizes_match_mesh(tmp_path):
     m = NeuralSSS(37, 32)
     _, lo, hi = quantize(m.latents.detach())
     export(m, np.zeros(11), np.ones(11), lo, hi, tmp_path / "w.json", tmp_path / "l.bin")

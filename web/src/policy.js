@@ -6,20 +6,16 @@ export const pickPipeline = ({ halfFloatRT }) => (halfFloatRT ? "hdr" : "ldr");
 // A "Path tracé" side shows neural until its (lazy, several-MB) reference image has loaded.
 export const sideMode = (requested, refReady) => (requested === "ref" && !refReady ? "neural" : requested);
 
-// Keep the current width on screen until the requested width's latents are downloaded.
-export const effectiveWidth = (requested, loadedWidths, current) => (loadedWidths.has(requested) ? requested : current);
-
 // What each pipeline may use. PMREM (env reflections, blurred background) renders into half-float
-// targets too, so the ldr fallback must avoid it; the reference quad is tone-mapped like the rest
-// (three only applies tone mapping when drawing to the screen, i.e. in the ldr path).
+// targets too, so the ldr fallback must avoid it.
 export const pipelineSettings = (pipeline) => (pipeline === "hdr"
-  ? { useEnvMap: true, backgroundBlurriness: 0.4, refToneMapped: true }
-  : { useEnvMap: false, backgroundBlurriness: 0, refToneMapped: true });
+  ? { useEnvMap: true, backgroundBlurriness: 0.4 }
+  : { useEnvMap: false, backgroundBlurriness: 0 });
 
 const SIDES = ["classic", "neural", "ref"];
 
-// Deep links. Applied in `order`: pose, then lamp, then sides — a "ref" side snaps the lamp to its
-// reference pose last, so a ?lamp= can never sit under a reference image it does not match.
+// Deep links. The page applies them in this order: pose, then lamp, then sides — a "ref" side snaps
+// the lamp to its reference pose last, so a ?lamp= can never sit under a reference image it does not match.
 export function parseDeepLink(search, cfg) {
   const q = new URLSearchParams(search);
   const sides = {};
@@ -28,7 +24,6 @@ export function parseDeepLink(search, cfg) {
   const [az, el] = (q.get("lamp") ?? "").split(",").map((v) => (v === "" ? NaN : Number(v)));
   const split = q.has("split") && Number.isFinite(Number(q.get("split"))) ? Math.min(1, Math.max(0, Number(q.get("split")))) : null;
   return {
-    order: ["pose", "lamp", "sides"],
     pose: pose >= 0 && pose < cfg.ref_poses.length ? pose : null,
     lamp: Number.isFinite(az) && Number.isFinite(el) ? { az_deg: az, el_deg: el } : null,
     sides, split,

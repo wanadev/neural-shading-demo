@@ -2,6 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Dragon de jade neuronal</title>
 <meta name="description" content="La lumière dans le jade calculée par un petit réseau de neurones, en temps réel dans le navigateur.">
@@ -17,7 +18,7 @@
 <div id="app">
   <div id="view">
     <div id="stage" style="--split: 50%">
-      <canvas id="c"></canvas>
+      <canvas id="c" role="img" aria-label="Dragon de jade rendu en temps réel, deux méthodes côte à côte"></canvas>
       <div id="handle"></div>
       <span id="tagL" class="tag">Classique</span>
       <span id="tagR" class="tag">Neural</span>
@@ -32,13 +33,13 @@
 
     <div>
       <div class="lbl">Réseau</div>
-      <div class="row"><div class="seg" id="widths"></div><span class="side-lbl" style="width:auto">neurones</span></div>
+      <div class="row"><div class="seg" id="widths" role="group" aria-label="Taille du réseau"></div><span class="side-lbl" style="width:auto">neurones</span></div>
     </div>
 
     <div>
       <div class="lbl">Lumière</div>
       <div class="row">
-        <div class="seg"><button id="moveCam" class="on">Caméra</button><button id="moveLamp">Lampe</button></div>
+        <div class="seg" role="group" aria-label="Le glisser déplace"><button id="moveCam" class="on">Caméra</button><button id="moveLamp">Lampe</button></div>
         <button class="btn" id="backlight">☀ Contre-jour</button>
       </div>
     </div>
@@ -47,8 +48,8 @@
       <summary>Comparer et mesurer</summary>
       <div class="group">
         <div class="lbl">Gauche · droite du rideau</div>
-        <div class="row"><span class="side-lbl">Gauche</span><div class="seg" id="left"></div></div>
-        <div class="row" style="margin-top:8px"><span class="side-lbl">Droite</span><div class="seg" id="right"></div></div>
+        <div class="row"><span class="side-lbl">Gauche</span><div class="seg" id="left" role="group" aria-label="Gauche du rideau"></div></div>
+        <div class="row" style="margin-top:8px"><span class="side-lbl">Droite</span><div class="seg" id="right" role="group" aria-label="Droite du rideau"></div></div>
       </div>
       <div class="group">
         <div class="lbl">Coût par image (GPU)</div>

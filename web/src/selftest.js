@@ -104,17 +104,16 @@ void main() {
   mesh.frustumCulled = false;
   scene.add(mesh);
   const rt = new THREE.WebGLRenderTarget(W, H, { type: THREE.FloatType });
-  const read = (which) => {
+  const px = new Float32Array(4);
+  const read = (which) => {  // only each sample's centre pixel: a full readback is ~50 MB on a phone
     mat.uniforms.uWhich.value = which;
     renderer.setRenderTarget(rt);
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
     renderer.render(scene, new THREE.Camera());
-    const px = new Float32Array(4 * W * H);
-    renderer.readRenderTargetPixels(rt, 0, 0, W, H, px);
-    return px;
+    return samples.map((_, i) => { const [x, y] = centre(i); renderer.readRenderTargetPixels(rt, x, y, 1, 1, px); return [px[0], px[1], px[2]]; });
   };
   const e = read(0), l = read(1);
-  rt.dispose(); g.dispose(); mat.dispose();
-  return samples.map((_, i) => { const [x, y] = centre(i), o = (y * W + x) * 4; return [e[o], e[o + 1], e[o + 2], l[o], l[o + 1], l[o + 2]]; });
+  rt.dispose(); g.dispose(); mat.uniforms.uNet.value.dispose(); mat.dispose();
+  return samples.map((_, i) => [...e[i], ...l[i]]);
 }

@@ -12,10 +12,6 @@ import trimesh
 from pipeline.config import DRAGON, OUT, WEB_DATA
 
 
-def load_dragon(ply_path) -> trimesh.Trimesh:
-    return trimesh.load(ply_path, process=False)
-
-
 def _repair(m: trimesh.Trimesh) -> trimesh.Trimesh:
     m = trimesh.Trimesh(m.vertices, m.faces, process=True)  # merges duplicate vertices
     m = max(m.split(only_watertight=False), key=lambda p: len(p.faces))  # drop scan debris
@@ -76,10 +72,12 @@ def main(argv=None):
     if not src.exists():
         with tarfile.open(tgz) as t:
             t.extract(DRAGON["member"], d, filter="data")
-    V, F, N = prepare(load_dragon(src), DRAGON["target_faces"], DRAGON["height"])
+    V, F, N = prepare(trimesh.load(src, process=False), DRAGON["target_faces"], DRAGON["height"])
     dst.parent.mkdir(parents=True, exist_ok=True)
     write_ply(dst, V, F, N)
     print(f"dragon: {len(V)} vertices, {len(F)} faces")
+    if a.force:
+        print("now delete pipeline/out/*_shards: their triangle indices point into the old mesh")
 
 
 if __name__ == "__main__":
