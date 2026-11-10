@@ -4,7 +4,7 @@ Un petit réseau de neurones (2 couches de 16 neurones, 8 Ko de poids) remplace,
 WebGL2, le calcul de la lumière qui traverse le jade (subsurface scattering). Il est entraîné sur des
 rendus path tracés Mitsuba 3, et tourne en GLSL ordinaire sur n'importe quel GPU, téléphone compris.
 
-- **Démo** : *(lien à venir)* · **Labo** (AO et verre) : *(lien à venir)*
+- **Démo** : https://wanadev.github.io/neural-shading-demo/ · **Labo** (AO et verre) : https://wanadev.github.io/neural-shading-demo/labo.html
 - **Article** : *Neural shading en WebGL : ce que vaut un réseau de neurones dans un shader* *(lien à venir)*
 
 Un rideau compare, sur le dragon de Stanford, l'approximation classique des jeux, le réseau et la
