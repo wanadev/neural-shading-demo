@@ -17,6 +17,33 @@ def raw_features(nrm, pos, cam, lamp) -> np.ndarray:
     return np.concatenate([nrm, view, L, dist, np.sum(nrm * L, -1, keepdims=True)], -1).astype(np.float32)
 
 
+def mesh_edges(F) -> np.ndarray:
+    """Unique undirected edges (E, 2) of a triangle mesh."""
+    F = np.asarray(F)
+    e = np.sort(np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]), axis=1)
+    return np.unique(e, axis=0)
+
+
+def smooth_normals(F, N, iters) -> np.ndarray:
+    """Vertex normals averaged with their neighbours `iters` times (a blur of radius ~ edge * sqrt(iters)),
+    as int8 (x 127), exactly what the web reads (web/data/normals_net.bin, a normalized Int8 attribute).
+    Light diffuses a few millimetres inside jade, so the scan's small bumps should not reach the network."""
+    E = mesh_edges(F)
+    n = np.asarray(N, np.float64)
+    for _ in range(iters):
+        acc = n.copy()
+        np.add.at(acc, E[:, 0], n[E[:, 1]])
+        np.add.at(acc, E[:, 1], n[E[:, 0]])
+        n = unit(acc)
+    return np.round(unit(n) * 127).astype(np.int8)
+
+
+def interp_normal(Nq, F, tri, bary) -> np.ndarray:
+    """The network's normal at a surface point: int8 vertex normals interpolated, then normalized (as in GLSL)."""
+    n = (np.asarray(bary, np.float64)[..., None] * (np.asarray(Nq)[np.asarray(F)[tri]] / 127.0)).sum(1)
+    return unit(n).astype(np.float32)
+
+
 def barycentric(pos, V, F, tri) -> np.ndarray:
     """Barycentric coordinates of each point in its triangle, clipped to [0, 1] and renormalised."""
     a, b, c = (np.asarray(V, np.float64)[F[tri, k]] for k in range(3))

@@ -18,11 +18,13 @@ détail est dans [`docs/results.md`](docs/results.md).
 | méthode | toutes poses | contre-jour |
 |---|---|---|
 | approximation classique (épaisseur par vertex + SH), ajustée sur les mêmes données | 1,04 | 1,69 |
-| réseau 16 neurones | 0,39 | 0,58 |
-| réseau 32 neurones | 0,38 | 0,57 |
+| réseau 16 neurones | 0,35 | 0,50 |
+| réseau 32 neurones | 0,37 | 0,56 |
 | réseau 64 neurones | 0,42 | 0,68 |
 
-La démo charge 3,0 Mo au démarrage (HDRI et maillage pour l'essentiel) et reste jouable sur un
+Un réseau plus gros colle mieux aux vues d'entraînement mais généralise moins bien : la démo utilise le 16.
+
+La démo charge 3,2 Mo au démarrage (HDRI et maillage pour l'essentiel) et reste jouable sur un
 Pixel 6a avec le réseau 16. Le bouton « Mesurer » de la page donne le coût sur votre appareil.
 
 ## Comment ça marche
@@ -39,8 +41,11 @@ lumière exacte en 2,7 M points      entraînés ensemble                 poids 
    triangle touché.
 2. **Entraînement** : chaque sommet porte 8 valeurs apprises (les *latents*) qui résument comment la
    lumière se comporte à cet endroit. Interpolées sur le triangle et combinées à la géométrie
-   (normale, directions de la caméra et de la lampe), elles passent dans un MLP à activation ReLU²
-   qui prédit 6 valeurs : la lumière venant de la pièce et celle venant de la lampe.
+   (normale lissée, directions de la caméra et de la lampe), elles passent dans un MLP à activation
+   ReLU² qui prédit 6 valeurs : la lumière venant de la pièce et celle venant de la lampe. Deux
+   garde-fous évitent un rendu « froissé » : une pénalité qui force les latents de sommets voisins à se
+   ressembler (sinon ils apprennent le bruit du path tracer), et une normale lissée sur ~5 mm (la lumière
+   se diffuse sur cette distance dans le jade, elle ne voit pas les petites bosses du scan).
 3. **Rendu** : le résultat est injecté comme lumière émise dans un `MeshPhysicalMaterial`. three.js
    garde les reflets, les ombres et le bloom.
 

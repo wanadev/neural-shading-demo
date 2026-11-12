@@ -12,9 +12,13 @@ import trimesh
 from torch import nn
 
 from pipeline.config import LATENT_DIM, WEB_DATA, WIDTHS
-from pipeline.features import raw_features
+from pipeline.features import interp_normal, mesh_edges, raw_features, smooth_normals
 
 N_RAW = 11
+# Latent edge-smoothness weight per width (see train()), each the best of a sweep against the references.
+# Bigger networks fit the training views better but generalise worse to new poses: 16 stays the best.
+SMOOTH = {16: 0.3, 32: 10.0, 64: 1.0}
+NORMAL_ITERS = 40  # neighbour-averaging passes for the network's normal; 12 and 100 do worse on the references
 
 
 class NeuralSSS(nn.Module):
@@ -64,17 +68,17 @@ def clamp_fireflies(Y, pct=99.99, factor=1.5):
 def _load_samples(npz_path: str):
     """Millions of samples: loaded once per run (train + finetune for each width reuse them)."""
     d = dict(np.load(npz_path))
-    raw = raw_features(d["nrm"], d["pos"], d["cam"], d["lamp"])
-    Y = clamp_fireflies(np.concatenate([d["Y_env"], d["Y_lamp"]], 1))
-    return d, raw, Y
+    return d, clamp_fireflies(np.concatenate([d["Y_env"], d["Y_lamp"]], 1))
 
 
-def _load(npz_path, F):
-    d, raw, Y = _load_samples(str(npz_path))
-    return d, raw, Y, np.asarray(F)[d["tri"]]
+def _load(npz_path, F, Nq=None):
+    """Nq: the network's int8 vertex normals (smooth_normals); None = the renderer's shading normal."""
+    d, Y = _load_samples(str(npz_path))
+    nrm = d["nrm"] if Nq is None else interp_normal(Nq, F, d["tri"], d["bary"])
+    return d, raw_features(nrm, d["pos"], d["cam"], d["lamp"]), Y, np.asarray(F)[d["tri"]]
 
 
-def _fit(model, params, TV, B, R, Y, idx, epochs, batch, lr, seed, extra_groups=()):
+def _fit(model, params, TV, B, R, Y, idx, epochs, batch, lr, seed, extra_groups=(), reg=None):
     opt = torch.optim.Adam([{"params": params, "lr": lr}, *extra_groups])
     steps = epochs * max(1, len(idx) // batch)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
@@ -84,6 +88,8 @@ def _fit(model, params, TV, B, R, Y, idx, epochs, batch, lr, seed, extra_groups=
         pred = model(TV[b], B[b], R[b])
         # relative MSE (unbiased on noisy targets, unlike fitting a transformed target)
         loss = ((pred - Y[b]) ** 2 / (pred.detach() + 0.01) ** 2).mean()
+        if reg is not None:
+            loss = loss + reg()
         opt.zero_grad(); loss.backward(); opt.step(); sched.step()
 
 
@@ -98,9 +104,13 @@ def _val_err(model, TV, B, R, Y, va):
         return rel_err(model(TV[v], B[v], R[v]).numpy(), Y[v].numpy())
 
 
-def train(npz_path, F, n_vertices, width, epochs=30, batch=8192, lr=3e-3, seed=0):
+def train(npz_path, F, n_vertices, width, epochs=30, batch=8192, lr=3e-3, seed=0, smooth=None, Nq=None):
+    """smooth: weight of a penalty on latent differences across mesh edges. Each vertex sees only a few
+    dozen noisy samples; without it the latents learn Monte Carlo noise and the surface looks crumpled.
+    It also gives vertices no camera ever saw the average of their neighbours."""
     torch.manual_seed(seed)
-    d, raw, Y, tv = _load(npz_path, F)
+    smooth = SMOOTH.get(width, 0.0) if smooth is None else smooth
+    d, raw, Y, tv = _load(npz_path, F, Nq)
     tr, va = split_views(d["view_id"])
     mean, std = raw[tr].mean(0), raw[tr].std(0) + 1e-6
     TV, B, R, Yt = _tensors(raw, mean, std, Y, tv, d)
@@ -108,8 +118,10 @@ def train(npz_path, F, n_vertices, width, epochs=30, batch=8192, lr=3e-3, seed=0
     model.set_output_cap(1.2 * Y[tr].max(0))  # a little headroom over the brightest target
     with torch.no_grad():
         model.out.bias.copy_(torch.log(torch.from_numpy(np.maximum(Y[tr].mean(0), 1e-4))))
+    E = torch.from_numpy(mesh_edges(np.asarray(F)))
+    reg = (lambda: smooth * ((model.latents[E[:, 0]] - model.latents[E[:, 1]]) ** 2).sum(1).mean()) if smooth else None
     _fit(model, model.mlp_parameters(), TV, B, R, Yt, np.flatnonzero(tr), epochs, batch, lr, seed,
-         extra_groups=[{"params": [model.latents], "lr": lr * 3}])  # each latent sees few samples: faster lr
+         extra_groups=[{"params": [model.latents], "lr": lr * 3}], reg=reg)  # each latent sees few samples: faster lr
     return model, mean, std, _val_err(model, TV, B, R, Yt, va)
 
 
@@ -121,13 +133,13 @@ def quantize(latents):
     return q, lo.astype(np.float32), hi.astype(np.float32)
 
 
-def finetune_quantized(model, npz_path, F, mean, std, epochs=5, batch=8192, lr=1e-3, seed=1):
+def finetune_quantized(model, npz_path, F, mean, std, epochs=5, batch=8192, lr=1e-3, seed=1, Nq=None):
     """Freeze the latents at their 8-bit values and refit the MLP to them."""
     q, lo, hi = quantize(model.latents)
     with torch.no_grad():
         model.latents.copy_(torch.from_numpy(lo + (hi - lo) * q.astype(np.float32) / 255))
     model.latents.requires_grad_(False)
-    d, raw, Y, tv = _load(npz_path, F)
+    d, raw, Y, tv = _load(npz_path, F, Nq)
     tr, va = split_views(d["view_id"])
     TV, B, R, Yt = _tensors(raw, mean, std, Y, tv, d)
     _fit(model, model.mlp_parameters(), TV, B, R, Yt, np.flatnonzero(tr), epochs, batch, lr, seed)
@@ -172,14 +184,17 @@ def main(argv=None):
     a = p.parse_args(argv)
     m = trimesh.load(WEB_DATA / "dragon.ply", process=False)
     F, nv = np.asarray(m.faces), len(m.vertices)
-    d, raw, _, tv = _load(a.data, F)
+    Nq = smooth_normals(F, m.vertex_normals, NORMAL_ITERS)
+    (WEB_DATA / "normals_net.bin").write_bytes(Nq.tobytes())
+    d, raw, _, tv = _load(a.data, F, Nq)
     pick = selftest_samples(d, 32)
-    fx = dict(samples=[dict(tri_verts=tv[i].tolist(), bary=d["bary"][i].tolist(), nrm=d["nrm"][i].tolist(),
-                            pos=d["pos"][i].tolist(), cam=d["cam"][i].tolist(), lamp=d["lamp"][i].tolist()) for i in pick],
+    nrm = interp_normal(Nq, F, d["tri"][pick], d["bary"][pick])
+    fx = dict(samples=[dict(tri_verts=tv[i].tolist(), bary=d["bary"][i].tolist(), nrm=n.tolist(),
+                            pos=d["pos"][i].tolist(), cam=d["cam"][i].tolist(), lamp=d["lamp"][i].tolist()) for i, n in zip(pick, nrm)],
               expected={})
     for w in WIDTHS:
-        model, mean, std, err = train(a.data, F, nv, w, a.epochs)
-        q, lo, hi, err_q = finetune_quantized(model, a.data, F, mean, std, a.ft_epochs)
+        model, mean, std, err = train(a.data, F, nv, w, a.epochs, Nq=Nq)
+        q, lo, hi, err_q = finetune_quantized(model, a.data, F, mean, std, a.ft_epochs, Nq=Nq)
         export(model, mean, std, lo, hi, WEB_DATA / f"weights_{w}.json", WEB_DATA / f"latents_{w}.bin")
         weights = json.loads((WEB_DATA / f"weights_{w}.json").read_text())
         fx["expected"][str(w)] = forward_numpy(weights, q, tv[pick], d["bary"][pick], raw[pick]).tolist()

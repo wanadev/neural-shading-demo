@@ -35,15 +35,18 @@ export function makeJadeMaterial({ mode, weights, classic, cfg, shared, envMap }
 attribute vec4 latA;
 attribute vec4 latB;
 attribute float thick;
+attribute vec3 nNet;
 varying vec4 vLatA;
 varying vec4 vLatB;
 varying float vThick;
 varying vec3 vWPos;
-varying vec3 vWNrm;`)
+varying vec3 vWNrm;
+varying vec3 vNNet;`)
       .replace("#include <begin_vertex>", `#include <begin_vertex>
 vLatA = latA; vLatB = latB; vThick = thick;
 vWPos = (modelMatrix * vec4(position, 1.0)).xyz;
-vWNrm = normalize(mat3(modelMatrix) * normal);`);
+vWNrm = normalize(mat3(modelMatrix) * normal);
+vNNet = mat3(modelMatrix) * nNet;`);
     s.fragmentShader = s.fragmentShader
       .replace("#include <common>", `#include <common>
 uniform vec3 uLamp;
@@ -53,6 +56,7 @@ varying vec4 vLatB;
 varying float vThick;
 varying vec3 vWPos;
 varying vec3 vWNrm;
+varying vec3 vNNet;
 ${SH_GLSL}
 ${neural ? FEATURES_GLSL + mlpGlsl(weights) : CLASSIC_GLSL}`)
       .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>
@@ -61,7 +65,7 @@ ${neural ? FEATURES_GLSL + mlpGlsl(weights) : CLASSIC_GLSL}`)
   vec3 envSSS, lampSSS;
 ${neural
     ? `  float x[19];
-  features(vLatA, vLatB, n, vWPos, cameraPosition, uLamp, x);
+  features(vLatA, vLatB, normalize(vNNet), vWPos, cameraPosition, uLamp, x);  // smoothed normal (normals_net.bin)
   neuralSSS(x, envSSS, lampSSS);`
     : `  classicSSS(n, vWPos, cameraPosition, uLamp, vThick * uThickMax, envSSS, lampSSS);`}
   totalEmissiveRadiance += envSSS + lampSSS;

@@ -59,7 +59,8 @@ def test_export_sizes_match_mesh(tmp_path):
 
 def test_overfits_toy_and_survives_quantization(tmp_path):
     p, F, n_vert = _toy(tmp_path)
-    model, mean, std, err = train(p, F, n_vert, 16, epochs=150, batch=512)
+    # smooth=0: the toy's triangles are random, its latents have no reason to agree across edges
+    model, mean, std, err = train(p, F, n_vert, 16, epochs=150, batch=512, smooth=0)
     assert err < 0.05
     q, lo, hi, err_q = finetune_quantized(model, p, F, mean, std, epochs=20, batch=512)
     assert err_q < 0.06
@@ -97,3 +98,13 @@ def test_firefly_targets_are_clamped():
     Y[:5, 3] = 1000.0
     C = clamp_fireflies(Y)
     assert C.max() < 3 and np.allclose(C[5:], Y[5:])
+
+
+def test_smoothness_makes_neighbour_latents_agree(tmp_path):
+    from pipeline.features import mesh_edges
+    p, F, n_vert = _toy(tmp_path)
+    E = mesh_edges(F)
+    gap = lambda m: float((m.latents[E[:, 0]] - m.latents[E[:, 1]]).abs().mean() / m.latents.std())
+    rough = gap(train(p, F, n_vert, 16, epochs=20, batch=512, smooth=0)[0])
+    smooth = gap(train(p, F, n_vert, 16, epochs=20, batch=512, smooth=3)[0])
+    assert smooth < rough / 2

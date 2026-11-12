@@ -42,9 +42,9 @@ try {
 
 async function main() {
   const cfg = await json("data/config.json");
-  const [envSH, classic, geometry, thickness] = await Promise.all([
+  const [envSH, classic, geometry, thickness, netNormals] = await Promise.all([
     json("data/env_sh.json"), json("data/classic.json"), new PLYLoader().loadAsync("data/dragon.ply"),
-    bytes("data/thickness.bin"),
+    bytes("data/thickness.bin"), bytes("data/normals_net.bin"),
   ]);
   const hdr = await new HDRLoader().loadAsync(`data/${envSH.file}`);
   hdr.mapping = THREE.EquirectangularReflectionMapping;
@@ -112,6 +112,8 @@ async function main() {
   let size = 0, tween = null, benching = false;
   await loadWidth(16);
   geometry.setAttribute("thick", new THREE.BufferAttribute(thickness, 1, true));
+  // the network's normal: vertex normals smoothed over ~5 mm (pipeline/features.py::smooth_normals)
+  geometry.setAttribute("nNet", new THREE.BufferAttribute(new Int8Array(netNormals.buffer), 3, true));
   setJadeAttributes(geometry, latents[16]);
 
   function setLamp(l) {

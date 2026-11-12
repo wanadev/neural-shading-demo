@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from pipeline.classic import classic_sss, load_classic_inputs
 from pipeline.config import BACKLIT, LATENT_DIM, OUT, REF_POSES, WEB_DATA, WIDTHS
-from pipeline.features import barycentric, raw_features
+from pipeline.features import barycentric, interp_normal, raw_features
 from pipeline.gen_data import dragon_mesh
 from pipeline.scene import camera_origin, lamp_position
 from pipeline.train import forward_numpy
@@ -35,6 +35,7 @@ def main():
     classic = json.loads((WEB_DATA / "classic.json").read_text())
     nets = {w: (json.loads((WEB_DATA / f"weights_{w}.json").read_text()),
                 np.frombuffer((WEB_DATA / f"latents_{w}.bin").read_bytes(), np.uint8).reshape(-1, LATENT_DIM)) for w in WIDTHS}
+    Nq = np.frombuffer((WEB_DATA / "normals_net.bin").read_bytes(), np.int8).reshape(-1, 3)
     rows = []
     for i, pose in enumerate(REF_POSES):
         r = np.load(OUT / f"ref{i}.npz")
@@ -47,7 +48,8 @@ def main():
         sss = r["both"][..., :3]  # null boundary: radiance on the dragon is the SSS term
         methods = {"classique": lambda: classic_sss(nrm, pos, cam, lamp, (bary * vert_th[F[tri]]).sum(1), sh, classic)}
         for w, (wt, q) in nets.items():
-            methods[f"neuronal {w}"] = lambda wt=wt, q=q: forward_numpy(wt, q, F[tri], bary, raw_features(nrm, pos, cam, lamp))
+            methods[f"neuronal {w}"] = lambda wt=wt, q=q: forward_numpy(wt, q, F[tri], bary,
+                                                                              raw_features(interp_normal(Nq, F, tri, bary), pos, cam, lamp))
         for name, f in methods.items():
             out6 = f()
             pred = np.zeros_like(sss)
